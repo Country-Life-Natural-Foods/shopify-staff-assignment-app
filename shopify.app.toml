@@ -1,0 +1,15 @@
+{
+  "name": "Staff Assignment Manager",
+  "client_id": "your_app_client_id",
+  "application_url": "https://your-app-url.ngrok.io",
+  "embedded": true,
+  "access_scopes": {
+    "scopes": "read_companies,write_companies,read_customers,write_customers"
+  },
+  "webhooks": {
+    "api_version": "2025-01"
+  },
+  "pos": {
+    "embedded": false
+  }
+}

@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Staff Assignment Manager</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f6f6f7;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #7f8c8d;
+        }
+
+        .tabs {
+            display: flex;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 15px 20px;
+            background: #ecf0f1;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+
+        .tab.active {
+            background: #3498db;
+            color: white;
+        }
+
+        .tab:hover:not(.active) {
+            background: #bdc3c7;
+        }
+
+        .content {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            min-height: 400px;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+        }
+
+        .error {
+            background: #e74c3c;
+            color: white;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .success {
+            background: #27ae60;
+            color: white;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .list-item {
+            background: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            border-left: 4px solid #3498db;
+        }
+
+        .list-item h3 {
+            margin-bottom: 5px;
+            color: #2c3e50;
+        }
+
+        .list-item p {
+            color: #7f8c8d;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .form-group select,
+        .form-group input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+
+        .btn {
+            background: #3498db;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+
+        .btn:hover {
+            background: #2980b9;
+        }
+
+        .btn-danger {
+            background: #e74c3c;
+        }
+
+        .btn-danger:hover {
+            background: #c0392b;
+        }
+
+        .btn-success {
+            background: #27ae60;
+        }
+
+        .btn-success:hover {
+            background: #229954;
+        }
+
+        .btn:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .tabs {
+                flex-direction: column;
+            }
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #3498db;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: #7f8c8d;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏢 Staff Assignment Manager</h1>
+            <p>Manage staff assignments to company locations in your Shopify store</p>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('overview')">Overview</button>
+            <button class="tab" onclick="showTab('companies')">Companies</button>
+            <button class="tab" onclick="showTab('staff')">Staff</button>
+            <button class="tab" onclick="showTab('assignments')">Assignments</button>
+            <button class="tab" onclick="showTab('bulk-assign')">Bulk Assign</button>
+        </div>
+
+        <div class="content">
+            <!-- Overview Tab -->
+            <div id="overview" class="tab-content active">
+                <h2>📊 Overview</h2>
+                <div class="stats" id="stats">
+                    <div class="stat-card">
+                        <div class="stat-number" id="companies-count">-</div>
+                        <div class="stat-label">Companies</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="staff-count">-</div>
+                        <div class="stat-label">Staff Members</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="assignments-count">-</div>
+                        <div class="stat-label">Active Assignments</div>
+                    </div>
+                </div>
+                <div id="overview-content">
+                    <div class="loading">Loading overview data...</div>
+                </div>
+            </div>
+
+            <!-- Companies Tab -->
+            <div id="companies" class="tab-content">
+                <h2>🏢 Companies</h2>
+                <div id="companies-content">
+                    <div class="loading">Loading companies...</div>
+                </div>
+            </div>
+
+            <!-- Staff Tab -->
+            <div id="staff" class="tab-content">
+                <h2>👥 Staff Members</h2>
+                <div id="staff-content">
+                    <div class="loading">Loading staff...</div>
+                </div>
+            </div>
+
+            <!-- Assignments Tab -->
+            <div id="assignments" class="tab-content">
+                <h2>🔗 Staff Assignments</h2>
+                <div class="grid">
+                    <div>
+                        <h3>Assign Staff to Company</h3>
+                        <form id="assign-form">
+                            <div class="form-group">
+                                <label for="assign-staff-select">Select Staff:</label>
+                                <select id="assign-staff-select" required>
+                                    <option value="">Loading staff...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="assign-company-select">Select Company:</label>
+                                <select id="assign-company-select" required>
+                                    <option value="">Loading companies...</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-success">Assign Staff</button>
+                        </form>
+                    </div>
+                    <div>
+                        <h3>Remove Staff from Company</h3>
+                        <form id="remove-form">
+                            <div class="form-group">
+                                <label for="remove-staff-select">Select Staff:</label>
+                                <select id="remove-staff-select" required>
+                                    <option value="">Loading staff...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="remove-company-select">Select Company:</label>
+                                <select id="remove-company-select" required>
+                                    <option value="">Select staff first</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-danger">Remove Staff</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bulk Assignment Tab -->
+            <div id="bulk-assign" class="tab-content">
+                <h2>🎯 Bulk Assignment by Location</h2>
+                <p>Assign a staff member to ALL companies in a specific location (e.g., all companies in Michigan)</p>
+                
+                <div class="grid">
+                    <div>
+                        <h3>Preview Companies by Location</h3>
+                        <form id="preview-form">
+                            <div class="form-group">
+                                <label for="preview-state">State/Province:</label>
+                                <input type="text" id="preview-state" placeholder="e.g., Michigan, CA, Ontario">
+                            </div>
+                            <div class="form-group">
+                                <label for="preview-city">City (optional):</label>
+                                <input type="text" id="preview-city" placeholder="e.g., Detroit, Los Angeles">
+                            </div>
+                            <div class="form-group">
+                                <label for="preview-zip">ZIP/Postal Code (optional):</label>
+                                <input type="text" id="preview-zip" placeholder="e.g., 48201, M5V 3A8">
+                            </div>
+                            <button type="submit" class="btn">Preview Companies</button>
+                        </form>
+                        
+                        <div id="preview-results" style="margin-top: 20px;"></div>
+                    </div>
+                    
+                    <div>
+                        <h3>Bulk Assign Staff</h3>
+                        <form id="bulk-assign-form">
+                            <div class="form-group">
+                                <label for="bulk-staff-select">Select Staff Member:</label>
+                                <select id="bulk-staff-select" required>
+                                    <option value="">Loading staff...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="bulk-state">State/Province:</label>
+                                <input type="text" id="bulk-state" placeholder="e.g., Michigan, CA, Ontario" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="bulk-city">City (optional):</label>
+                                <input type="text" id="bulk-city" placeholder="e.g., Detroit, Los Angeles">
+                            </div>
+                            <div class="form-group">
+                                <label for="bulk-zip">ZIP/Postal Code (optional):</label>
+                                <input type="text" id="bulk-zip" placeholder="e.g., 48201, M5V 3A8">
+                            </div>
+                            <button type="submit" class="btn btn-success">Assign to All Matching Companies</button>
+                        </form>
+                        
+                        <div id="bulk-results" style="margin-top: 20px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let companies = [];
+        let staff = [];
+
+        // Tab switching
+        function showTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab content
+            document.getElementById(tabName).classList.add('active');
+            
+            // Add active class to clicked tab
+            event.target.classList.add('active');
+            
+            // Load data for the tab
+            if (tabName === 'companies' && companies.length === 0) {
+                loadCompanies();
+            } else if (tabName === 'staff' && staff.length === 0) {
+                loadStaff();
+            } else if (tabName === 'overview') {
+                loadOverview();
+            }
+        }
+
+        // Load companies
+        async function loadCompanies() {
+            try {
+                const response = await fetch('/api/companies');
+                const data = await response.json();
+                
+                if (response.ok) {
+                    companies = data.edges.map(edge => edge.node);
+                    displayCompanies();
+                    updateStats();
+                } else {
+                    showError('Failed to load companies: ' + data.error);
+                }
+            } catch (error) {
+                showError('Error loading companies: ' + error.message);
+            }
+        }
+
+        // Display companies
+        function displayCompanies() {
+            const content = document.getElementById('companies-content');
+            
+            if (companies.length === 0) {
+                content.innerHTML = '<p>No companies found.</p>';
+                return;
+            }
+
+            content.innerHTML = companies.map(company => `
+                <div class="list-item">
+                    <h3>${company.name}</h3>
+                    <p><strong>ID:</strong> ${company.id}</p>
+                    <p><strong>External ID:</strong> ${company.externalId || 'N/A'}</p>
+                    <p><strong>Created:</strong> ${new Date(company.createdAt).toLocaleDateString()}</p>
+                    ${company.locations && company.locations.length > 0 ? `
+                        <p><strong>Locations:</strong> ${company.locations.length}</p>
+                    ` : ''}
+                    ${company.staff && company.staff.length > 0 ? `
+                        <p><strong>Staff:</strong> ${company.staff.length} assigned</p>
+                    ` : ''}
+                </div>
+            `).join('');
+        }
+
+        // Load staff
+        async function loadStaff() {
+            try {
+                const response = await fetch('/api/staff');
+                const data = await response.json();
+                
+                if (response.ok) {
+                    staff = data.edges.map(edge => edge.node);
+                    displayStaff();
+                    updateStats();
+                    populateSelects();
+                } else {
+                    showError('Failed to load staff: ' + data.error);
+                }
+            } catch (error) {
+                showError('Error loading staff: ' + error.message);
+            }
+        }
+
+        // Display staff
+        function displayStaff() {
+            const content = document.getElementById('staff-content');
+            
+            if (staff.length === 0) {
+                content.innerHTML = '<p>No staff members found.</p>';
+                return;
+            }
+
+            content.innerHTML = staff.map(member => `
+                <div class="list-item">
+                    <h3>${member.firstName} ${member.lastName}</h3>
+                    <p><strong>Email:</strong> ${member.email}</p>
+                    <p><strong>ID:</strong> ${member.id}</p>
+                    <p><strong>Created:</strong> ${new Date(member.createdAt).toLocaleDateString()}</p>
+                    ${member.companies && member.companies.length > 0 ? `
+                        <p><strong>Companies:</strong> ${member.companies.map(c => c.name).join(', ')}</p>
+                    ` : '<p><strong>Companies:</strong> None assigned</p>'}
+                </div>
+            `).join('');
+        }
+
+        // Populate select elements
+        function populateSelects() {
+            // Assign staff select
+            const assignStaffSelect = document.getElementById('assign-staff-select');
+            assignStaffSelect.innerHTML = '<option value="">Select staff member</option>' +
+                staff.map(member => `<option value="${member.id}">${member.firstName} ${member.lastName} (${member.email})</option>`).join('');
+
+            // Remove staff select
+            const removeStaffSelect = document.getElementById('remove-staff-select');
+            const assignedStaff = staff.filter(member => member.companies && member.companies.length > 0);
+            removeStaffSelect.innerHTML = '<option value="">Select staff member</option>' +
+                assignedStaff.map(member => `<option value="${member.id}">${member.firstName} ${member.lastName} (${member.email})</option>`).join('');
+
+            // Bulk staff select
+            const bulkStaffSelect = document.getElementById('bulk-staff-select');
+            bulkStaffSelect.innerHTML = '<option value="">Select staff member</option>' +
+                staff.map(member => `<option value="${member.id}">${member.firstName} ${member.lastName} (${member.email})</option>`).join('');
+
+            // Company selects
+            const assignCompanySelect = document.getElementById('assign-company-select');
+            const removeCompanySelect = document.getElementById('remove-company-select');
+            
+            assignCompanySelect.innerHTML = '<option value="">Select company</option>' +
+                companies.map(company => `<option value="${company.id}">${company.name}</option>`).join('');
+
+            // Update remove company select when staff is selected
+            removeStaffSelect.addEventListener('change', function() {
+                const selectedStaffId = this.value;
+                const selectedStaff = staff.find(member => member.id === selectedStaffId);
+                
+                removeCompanySelect.innerHTML = '<option value="">Select company</option>';
+                
+                if (selectedStaff && selectedStaff.companies) {
+                    selectedStaff.companies.forEach(company => {
+                        removeCompanySelect.innerHTML += `<option value="${company.id}">${company.name}</option>`;
+                    });
+                }
+            });
+        }
+
+        // Load overview
+        async function loadOverview() {
+            if (companies.length === 0) await loadCompanies();
+            if (staff.length === 0) await loadStaff();
+            
+            updateStats();
+            
+            const content = document.getElementById('overview-content');
+            content.innerHTML = `
+                <h3>Recent Activity</h3>
+                <p>Welcome to the Staff Assignment Manager! Use the tabs above to:</p>
+                <ul>
+                    <li><strong>Companies:</strong> View all company locations</li>
+                    <li><strong>Staff:</strong> View all staff members and their assignments</li>
+                    <li><strong>Assignments:</strong> Assign or remove staff from companies</li>
+                </ul>
+            `;
+        }
+
+        // Update statistics
+        function updateStats() {
+            document.getElementById('companies-count').textContent = companies.length;
+            document.getElementById('staff-count').textContent = staff.length;
+            
+            const assignmentsCount = staff.reduce((count, member) => {
+                return count + (member.companies ? member.companies.length : 0);
+            }, 0);
+            document.getElementById('assignments-count').textContent = assignmentsCount;
+        }
+
+        // Show error message
+        function showError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'error';
+            errorDiv.textContent = message;
+            document.querySelector('.content').insertBefore(errorDiv, document.querySelector('.content').firstChild);
+            
+            setTimeout(() => {
+                errorDiv.remove();
+            }, 5000);
+        }
+
+        // Show success message
+        function showSuccess(message) {
+            const successDiv = document.createElement('div');
+            successDiv.className = 'success';
+            successDiv.textContent = message;
+            document.querySelector('.content').insertBefore(successDiv, document.querySelector('.content').firstChild);
+            
+            setTimeout(() => {
+                successDiv.remove();
+            }, 5000);
+        }
+
+        // Assign staff form
+        document.getElementById('assign-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const staffId = document.getElementById('assign-staff-select').value;
+            const companyId = document.getElementById('assign-company-select').value;
+            
+            if (!staffId || !companyId) {
+                showError('Please select both staff member and company');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/assign', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ staffId, companyId })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showSuccess('Staff assigned successfully!');
+                    // Refresh data
+                    staff = [];
+                    await loadStaff();
+                } else {
+                    showError('Failed to assign staff: ' + (data.error.message || data.error));
+                }
+            } catch (error) {
+                showError('Error assigning staff: ' + error.message);
+            }
+        });
+
+        // Remove staff form
+        document.getElementById('remove-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const staffId = document.getElementById('remove-staff-select').value;
+            const companyId = document.getElementById('remove-company-select').value;
+            
+            if (!staffId || !companyId) {
+                showError('Please select both staff member and company');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/assign', {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ staffId, companyId })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showSuccess('Staff removed successfully!');
+                    // Refresh data
+                    staff = [];
+                    await loadStaff();
+                } else {
+                    showError('Failed to remove staff: ' + (data.error.message || data.error));
+                }
+            } catch (error) {
+                showError('Error removing staff: ' + error.message);
+            }
+        });
+
+        // Preview companies by location
+        async function previewCompaniesByLocation() {
+            const state = document.getElementById('preview-state').value.trim();
+            const city = document.getElementById('preview-city').value.trim();
+            const zip = document.getElementById('preview-zip').value.trim();
+            
+            if (!state && !city && !zip) {
+                showError('Please enter at least one location criteria');
+                return;
+            }
+            
+            const locationCriteria = {};
+            if (state) locationCriteria.state = state;
+            if (city) locationCriteria.city = city;
+            if (zip) locationCriteria.zip = zip;
+            
+            try {
+                const response = await fetch('/api/companies-by-location', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ locationCriteria })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    const resultsDiv = document.getElementById('preview-results');
+                    
+                    if (data.companies.length === 0) {
+                        resultsDiv.innerHTML = '<div class="error">No companies found matching the location criteria.</div>';
+                    } else {
+                        resultsDiv.innerHTML = `
+                            <div class="success">Found ${data.companies.length} companies matching your criteria:</div>
+                            <div style="max-height: 300px; overflow-y: auto; margin-top: 10px;">
+                                ${data.companies.map(company => `
+                                    <div class="list-item" style="margin-bottom: 10px;">
+                                        <h4>${company.name}</h4>
+                                        ${company.locations.map(location => `
+                                            <p><strong>Location:</strong> ${location.name}</p>
+                                            ${location.address ? `
+                                                <p><strong>Address:</strong> ${location.address.address1}, ${location.address.city}, ${location.address.province} ${location.address.zip}</p>
+                                            ` : ''}
+                                        `).join('')}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        `;
+                    }
+                } else {
+                    showError('Failed to preview companies: ' + data.error);
+                }
+            } catch (error) {
+                showError('Error previewing companies: ' + error.message);
+            }
+        }
+
+        // Bulk assign staff to companies by location
+        async function bulkAssignStaffByLocation() {
+            const staffId = document.getElementById('bulk-staff-select').value;
+            const state = document.getElementById('bulk-state').value.trim();
+            const city = document.getElementById('bulk-city').value.trim();
+            const zip = document.getElementById('bulk-zip').value.trim();
+            
+            if (!staffId) {
+                showError('Please select a staff member');
+                return;
+            }
+            
+            if (!state && !city && !zip) {
+                showError('Please enter at least one location criteria');
+                return;
+            }
+            
+            const locationCriteria = {};
+            if (state) locationCriteria.state = state;
+            if (city) locationCriteria.city = city;
+            if (zip) locationCriteria.zip = zip;
+            
+            const selectedStaff = staff.find(member => member.id === staffId);
+            
+            if (!confirm(`Are you sure you want to assign ${selectedStaff.firstName} ${selectedStaff.lastName} to ALL companies matching your location criteria?\n\nThis action cannot be undone easily.`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/bulk-assign', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ staffId, locationCriteria })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    const resultsDiv = document.getElementById('bulk-results');
+                    
+                    if (data.success) {
+                        resultsDiv.innerHTML = `
+                            <div class="success">
+                                ✅ Bulk assignment completed!<br>
+                                Assigned to ${data.assigned} out of ${data.total} companies
+                            </div>
+                        `;
+                        showSuccess(`Successfully assigned ${selectedStaff.firstName} ${selectedStaff.lastName} to ${data.assigned} companies!`);
+                        
+                        // Refresh staff data
+                        staff = [];
+                        await loadStaff();
+                    } else {
+                        resultsDiv.innerHTML = `<div class="error">❌ ${data.message}</div>`;
+                    }
+                    
+                    if (data.errors && data.errors.length > 0) {
+                        resultsDiv.innerHTML += `
+                            <div style="margin-top: 10px;">
+                                <h4>Errors encountered:</h4>
+                                ${data.errors.map(error => `
+                                    <div style="background: #f8d7da; padding: 10px; margin: 5px 0; border-radius: 4px;">
+                                        <strong>${error.company}:</strong> ${error.errors.map(e => e.message).join(', ')}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        `;
+                    }
+                } else {
+                    showError('Failed to perform bulk assignment: ' + data.error);
+                }
+            } catch (error) {
+                showError('Error performing bulk assignment: ' + error.message);
+            }
+        }
+
+        // Event listeners for bulk assignment forms
+        document.getElementById('preview-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            previewCompaniesByLocation();
+        });
+
+        document.getElementById('bulk-assign-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            bulkAssignStaffByLocation();
+        });
+
+        // Load initial data
+        document.addEventListener('DOMContentLoaded', function() {
+            loadOverview();
+        });
+    </script>
+</body>
+</html>
