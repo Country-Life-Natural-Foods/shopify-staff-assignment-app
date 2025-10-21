@@ -1,7 +1,12 @@
 const express = require('express');
+const session = require('express-session');
 const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
+require('dotenv').config();
+
+const { shopifyApi, LATEST_API_VERSION } = require('@shopify/shopify-api');
+const { shopifyApp } = require('@shopify/shopify-app-express');
 
 const app = express();
 
@@ -12,13 +17,72 @@ app.use(helmet({
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Session configuration for Vercel
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-session-secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: true, maxAge: 24 * 60 * 60 * 1000 } // 24 hours
+}));
+
+// Initialize Shopify API
+const shopify = shopifyApi({
+  apiKey: process.env.SHOPIFY_API_KEY,
+  apiSecretKey: process.env.SHOPIFY_API_SECRET,
+  scopes: ['read_companies', 'write_companies'],
+  hostName: process.env.SHOPIFY_APP_URL?.replace(/https?:\/\//, '') || 'localhost:3000',
+  apiVersion: LATEST_API_VERSION,
+  isEmbeddedApp: true,
+});
+
+// Initialize Shopify App
+const shopifyAppMiddleware = shopifyApp({
+  api: shopify,
+  auth: {
+    path: '/auth',
+    callbackPath: '/auth/callback',
+  },
+  webhooks: {
+    path: '/webhooks',
+  },
+  sessionStorage: {
+    storeSession: async (session) => {
+      // For Vercel, we'll use a simple in-memory store
+      // In production, consider using a database
+      return true;
+    },
+    loadSession: async (id) => {
+      // For Vercel, we'll use a simple in-memory store
+      // In production, consider using a database
+      return null;
+    },
+    deleteSession: async (id) => {
+      // For Vercel, we'll use a simple in-memory store
+      // In production, consider using a database
+      return true;
+    },
+  },
+});
+
+app.use(shopifyAppMiddleware);
 
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Basic route
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Routes
+app.get('/', async (req, res) => {
+  try {
+    if (!req.session.shop) {
+      return res.redirect('/auth');
+    }
+
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  } catch (error) {
+    console.error('Error loading app:', error);
+    res.status(500).send('Internal server error');
+  }
 });
 
 // Health check endpoint
@@ -26,48 +90,71 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Production API routes with error handling
+// API Routes
 app.get('/api/companies', async (req, res) => {
   try {
-    // TODO: Replace with real Shopify API calls when credentials are available
-    // For now, return mock data for testing
-    res.json({
-      edges: [
-        {
-          node: {
-            id: 'gid://shopify/Company/1',
-            name: 'Test Company',
-            externalId: 'EXT001',
-            createdAt: '2024-01-01T00:00:00Z',
-            updatedAt: '2024-01-01T00:00:00Z',
-            locations: {
-              edges: [
-                {
-                  node: {
-                    id: 'gid://shopify/CompanyLocation/1',
-                    name: 'Main Office',
-                    shippingAddress: {
-                      address1: '123 Main St',
-                      city: 'New York',
-                      province: 'NY',
-                      country: 'United States',
-                      zip: '10001'
-                    },
-                    staffMemberAssignments: {
-                      edges: []
+    if (!req.session.shop) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const client = new shopify.clients.Graphql({ session: req.session });
+    
+    const query = `
+      query getCompanies($first: Int!, $after: String) {
+        companies(first: $first, after: $after) {
+          edges {
+            node {
+              id
+              name
+              externalId
+              createdAt
+              updatedAt
+              locations(first: 10) {
+                edges {
+                  node {
+                    id
+                    name
+                    shippingAddress {
+                      address1
+                      city
+                      province
+                      country
+                      zip
+                    }
+                    staffMemberAssignments(first: 10) {
+                      edges {
+                        node {
+                          id
+                          staffMember {
+                            id
+                            firstName
+                            lastName
+                            email
+                          }
+                        }
+                      }
                     }
                   }
                 }
-              ]
+              }
             }
           }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
-      ],
-      pageInfo: {
-        hasNextPage: false,
-        endCursor: null
+      }
+    `;
+
+    const response = await client.query({
+      data: {
+        query,
+        variables: { first: 50 }
       }
     });
+
+    res.json(response.body.data.companies);
   } catch (error) {
     console.error('Error fetching companies:', error);
     res.status(500).json({ error: 'Failed to fetch companies' });
@@ -76,25 +163,94 @@ app.get('/api/companies', async (req, res) => {
 
 app.get('/api/staff', async (req, res) => {
   try {
-    // TODO: Replace with real Shopify API calls when credentials are available
-    res.json({
-      edges: [
-        {
-          node: {
-            id: 'gid://shopify/StaffMember/1',
-            firstName: 'John',
-            lastName: 'Doe',
-            email: 'john@example.com',
-            active: true,
-            isShopOwner: false
+    if (!req.session.shop) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const client = new shopify.clients.Graphql({ session: req.session });
+    
+    const query = `
+      query getCompaniesWithStaff($first: Int!, $after: String) {
+        companies(first: $first, after: $after) {
+          edges {
+            node {
+              id
+              locations(first: 10) {
+                edges {
+                  node {
+                    id
+                    staffMemberAssignments(first: 50) {
+                      edges {
+                        node {
+                          id
+                          staffMember {
+                            id
+                            firstName
+                            lastName
+                            email
+                            active
+                            isShopOwner
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
           }
         }
-      ],
+      }
+    `;
+
+    let allStaffMembers = [];
+    let hasNextPage = true;
+    let cursor = null;
+
+    while (hasNextPage) {
+      const response = await client.query({
+        data: {
+          query,
+          variables: { first: 50, after: cursor }
+        }
+      });
+
+      const companies = response.body.data.companies.edges.map(edge => edge.node);
+      companies.forEach(company => {
+        if (company.locations && company.locations.edges) {
+          company.locations.edges.forEach(locationEdge => {
+            const location = locationEdge.node;
+            if (location.staffMemberAssignments && location.staffMemberAssignments.edges) {
+              location.staffMemberAssignments.edges.forEach(assignmentEdge => {
+                const staffMember = assignmentEdge.node.staffMember;
+                if (!allStaffMembers.find(member => member.id === staffMember.id)) {
+                  allStaffMembers.push(staffMember);
+                }
+              });
+            }
+          });
+        }
+      });
+
+      hasNextPage = response.body.data.companies.pageInfo.hasNextPage;
+      cursor = response.body.data.companies.pageInfo.endCursor;
+    }
+
+    const formattedResponse = {
+      edges: allStaffMembers.map(member => ({
+        node: member
+      })),
       pageInfo: {
         hasNextPage: false,
         endCursor: null
       }
-    });
+    };
+
+    res.json(formattedResponse);
   } catch (error) {
     console.error('Error fetching staff:', error);
     res.status(500).json({ error: 'Failed to fetch staff' });
@@ -109,18 +265,50 @@ app.post('/api/assign', async (req, res) => {
       return res.status(400).json({ error: 'staffId and companyLocationId are required' });
     }
 
-    // TODO: Replace with real Shopify API calls when credentials are available
-    console.log('Assigning staff:', { staffId, companyLocationId });
+    if (!req.session.shop) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const client = new shopify.clients.Graphql({ session: req.session });
     
-    res.json({ 
-      success: true, 
-      message: 'Staff assigned successfully!',
-      assignment: {
-        id: 'gid://shopify/CompanyLocationStaffMemberAssignment/1',
-        staffMember: { id: staffId },
-        companyLocation: { id: companyLocationId }
+    const mutation = `
+      mutation companyLocationAssignStaffMembers($companyLocationId: ID!, $staffMemberIds: [ID!]!) {
+        companyLocationAssignStaffMembers(companyLocationId: $companyLocationId, staffMemberIds: $staffMemberIds) {
+          companyLocationStaffMemberAssignments {
+            id
+            staffMember {
+              id
+              firstName
+              lastName
+              email
+            }
+            companyLocation {
+              id
+              name
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    const response = await client.query({
+      data: {
+        query: mutation,
+        variables: { companyLocationId, staffMemberIds: [staffId] }
       }
     });
+
+    const result = response.body.data.companyLocationAssignStaffMembers;
+    
+    if (result.userErrors.length > 0) {
+      return res.status(400).json({ error: result.userErrors });
+    }
+
+    res.json({ success: true, assignment: result.companyLocationStaffMemberAssignments[0] });
   } catch (error) {
     console.error('Error assigning staff:', error);
     res.status(500).json({ error: 'Failed to assign staff' });
@@ -135,76 +323,41 @@ app.delete('/api/assign', async (req, res) => {
       return res.status(400).json({ error: 'assignmentId is required' });
     }
 
-    // TODO: Replace with real Shopify API calls when credentials are available
-    console.log('Removing assignment:', { assignmentId });
+    if (!req.session.shop) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const client = new shopify.clients.Graphql({ session: req.session });
     
-    res.json({ 
-      success: true, 
-      message: 'Staff removed successfully!',
-      deletedIds: [assignmentId]
+    const mutation = `
+      mutation companyLocationRemoveStaffMembers($companyLocationStaffMemberAssignmentIds: [ID!]!) {
+        companyLocationRemoveStaffMembers(companyLocationStaffMemberAssignmentIds: $companyLocationStaffMemberAssignmentIds) {
+          deletedCompanyLocationStaffMemberAssignmentIds
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    const response = await client.query({
+      data: {
+        query: mutation,
+        variables: { companyLocationStaffMemberAssignmentIds: [assignmentId] }
+      }
     });
+
+    const result = response.body.data.companyLocationRemoveStaffMembers;
+    
+    if (result.userErrors.length > 0) {
+      return res.status(400).json({ error: result.userErrors });
+    }
+
+    res.json({ success: true, deletedIds: result.deletedCompanyLocationStaffMemberAssignmentIds });
   } catch (error) {
     console.error('Error removing staff:', error);
     res.status(500).json({ error: 'Failed to remove staff' });
-  }
-});
-
-app.post('/api/bulk-assign', async (req, res) => {
-  try {
-    const { staffId, locationCriteria } = req.body;
-    
-    if (!staffId || !locationCriteria) {
-      return res.status(400).json({ error: 'staffId and locationCriteria are required' });
-    }
-
-    // TODO: Replace with real Shopify API calls when credentials are available
-    console.log('Bulk assigning staff:', { staffId, locationCriteria });
-    
-    res.json({
-      success: true,
-      message: 'Bulk assignment completed!',
-      assigned: 1,
-      total: 1,
-      errors: []
-    });
-  } catch (error) {
-    console.error('Error in bulk assignment:', error);
-    res.status(500).json({ error: 'Failed to perform bulk assignment' });
-  }
-});
-
-app.post('/api/companies-by-location', async (req, res) => {
-  try {
-    const { locationCriteria } = req.body;
-    
-    if (!locationCriteria) {
-      return res.status(400).json({ error: 'locationCriteria is required' });
-    }
-
-    // TODO: Replace with real Shopify API calls when credentials are available
-    console.log('Filtering companies by location:', locationCriteria);
-    
-    res.json({
-      locations: [
-        {
-          id: 'gid://shopify/CompanyLocation/1',
-          name: 'Main Office',
-          companyName: 'Test Company',
-          shippingAddress: {
-            address1: '123 Main St',
-            city: 'New York',
-            province: 'NY',
-            country: 'United States',
-            zip: '10001'
-          }
-        }
-      ],
-      total: 1,
-      criteria: locationCriteria
-    });
-  } catch (error) {
-    console.error('Error filtering companies by location:', error);
-    res.status(500).json({ error: 'Failed to filter companies by location' });
   }
 });
 
