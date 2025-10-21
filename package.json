@@ -10,14 +10,15 @@
     "deploy": "shopify app deploy"
   },
   "dependencies": {
-    "@shopify/shopify-api": "^8.1.1",
-    "express": "^4.18.2",
-    "dotenv": "^16.3.1",
+    "@shopify/shopify-api": "^12.0.0",
+    "@shopify/shopify-app-express": "^6.0.0",
     "axios": "^1.6.0",
-    "cors": "^2.8.5",
-    "helmet": "^7.1.0",
-    "express-session": "^1.17.3",
     "connect-sqlite3": "^0.9.13",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "helmet": "^7.1.0",
     "sqlite3": "^5.1.6"
   },
   "devDependencies": {

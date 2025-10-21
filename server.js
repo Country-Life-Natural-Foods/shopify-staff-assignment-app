@@ -54,7 +54,7 @@ app.use(session({
 const shopify = shopifyApi({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET,
-  scopes: ['read_companies', 'write_companies', 'read_customers', 'write_customers', 'read_users'],
+  scopes: ['read_companies', 'write_companies'],
   hostName: process.env.SHOPIFY_APP_URL?.replace(/https?:\/\//, '') || 'localhost:3000',
   apiVersion: LATEST_API_VERSION,
   isEmbeddedApp: true,
@@ -240,17 +240,36 @@ app.get('/api/staff', async (req, res) => {
 
     const client = new shopify.clients.Graphql({ session });
     
+    // Since we can't query staffMembers directly without read_users scope,
+    // we'll get staff through company location assignments
     const query = `
-      query getStaffMembers($first: Int!, $after: String) {
-        staffMembers(first: $first, after: $after) {
+      query getCompaniesWithStaff($first: Int!, $after: String) {
+        companies(first: $first, after: $after) {
           edges {
             node {
               id
-              firstName
-              lastName
-              email
-              active
-              isShopOwner
+              locations(first: 10) {
+                edges {
+                  node {
+                    id
+                    staffMemberAssignments(first: 50) {
+                      edges {
+                        node {
+                          id
+                          staffMember {
+                            id
+                            firstName
+                            lastName
+                            email
+                            active
+                            isShopOwner
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
           pageInfo {
@@ -261,14 +280,53 @@ app.get('/api/staff', async (req, res) => {
       }
     `;
 
-    const response = await client.query({
-      data: {
-        query,
-        variables: { first: 50 }
-      }
-    });
+    let allStaffMembers = [];
+    let hasNextPage = true;
+    let cursor = null;
 
-    res.json(response.body.data.staffMembers);
+    while (hasNextPage) {
+      const response = await client.query({
+        data: {
+          query,
+          variables: { first: 50, after: cursor }
+        }
+      });
+
+      // Extract unique staff members from all company locations
+      const companies = response.body.data.companies.edges.map(edge => edge.node);
+      companies.forEach(company => {
+        if (company.locations && company.locations.edges) {
+          company.locations.edges.forEach(locationEdge => {
+            const location = locationEdge.node;
+            if (location.staffMemberAssignments && location.staffMemberAssignments.edges) {
+              location.staffMemberAssignments.edges.forEach(assignmentEdge => {
+                const staffMember = assignmentEdge.node.staffMember;
+                // Only add if not already in the list
+                if (!allStaffMembers.find(member => member.id === staffMember.id)) {
+                  allStaffMembers.push(staffMember);
+                }
+              });
+            }
+          });
+        }
+      });
+
+      hasNextPage = response.body.data.companies.pageInfo.hasNextPage;
+      cursor = response.body.data.companies.pageInfo.endCursor;
+    }
+
+    // Format response to match expected structure
+    const formattedResponse = {
+      edges: allStaffMembers.map(member => ({
+        node: member
+      })),
+      pageInfo: {
+        hasNextPage: false,
+        endCursor: null
+      }
+    };
+
+    res.json(formattedResponse);
   } catch (error) {
     console.error('Error fetching staff:', error);
     res.status(500).json({ error: 'Failed to fetch staff' });

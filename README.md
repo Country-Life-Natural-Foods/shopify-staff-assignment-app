@@ -86,9 +86,6 @@ npm run dev
 Your Shopify app needs these scopes:
 - `read_companies`
 - `write_companies`
-- `read_customers`
-- `write_customers`
-- `read_users`
 
 ### App Settings
 
