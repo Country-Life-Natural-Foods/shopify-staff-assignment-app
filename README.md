@@ -72,10 +72,12 @@ npm run dev
 - `GET /` - App home page
 - `GET /auth` - OAuth authentication
 - `GET /auth/callback` - OAuth callback
-- `GET /api/companies` - List companies
-- `GET /api/staff` - List staff
-- `POST /api/assign` - Assign staff to company
-- `DELETE /api/assign` - Remove staff from company
+- `GET /api/companies` - List companies with locations and staff assignments
+- `GET /api/staff` - List staff members
+- `POST /api/assign` - Assign staff to company location
+- `DELETE /api/assign` - Remove staff from company location
+- `POST /api/bulk-assign` - Bulk assign staff to company locations by location criteria
+- `POST /api/companies-by-location` - Filter company locations by location criteria
 
 ## 🔧 Configuration
 
@@ -86,6 +88,7 @@ Your Shopify app needs these scopes:
 - `write_companies`
 - `read_customers`
 - `write_customers`
+- `read_users`
 
 ### App Settings
 

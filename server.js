@@ -12,6 +12,26 @@ const { shopifyApp } = require('@shopify/shopify-app-express');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Initialize SQLite database for sessions
+const sqlite3 = require('sqlite3').verbose();
+const sessionDb = new sqlite3.Database('sessions.sqlite');
+
+// Create sessions table if it doesn't exist
+sessionDb.serialize(() => {
+  sessionDb.run(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      shop TEXT NOT NULL,
+      state TEXT,
+      isOnline INTEGER DEFAULT 0,
+      scope TEXT,
+      expires INTEGER,
+      accessToken TEXT,
+      userId TEXT
+    )
+  `);
+});
+
 // Security middleware
 app.use(helmet({
   contentSecurityPolicy: false, // Disable CSP for Shopify app
@@ -34,7 +54,7 @@ app.use(session({
 const shopify = shopifyApi({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET,
-  scopes: ['read_companies', 'write_companies', 'read_customers', 'write_customers'],
+  scopes: ['read_companies', 'write_companies', 'read_customers', 'write_customers', 'read_users'],
   hostName: process.env.SHOPIFY_APP_URL?.replace(/https?:\/\//, '') || 'localhost:3000',
   apiVersion: LATEST_API_VERSION,
   isEmbeddedApp: true,
@@ -52,17 +72,65 @@ const shopifyAppMiddleware = shopifyApp({
   },
   sessionStorage: {
     storeSession: async (session) => {
-      // Store session in database
-      console.log('Storing session:', session.id);
+      // Store session in SQLite database
+      const db = require('sqlite3').Database;
+      const sessionDb = new db('sessions.sqlite');
+      
+      return new Promise((resolve, reject) => {
+        sessionDb.run(
+          'INSERT OR REPLACE INTO sessions (id, shop, state, isOnline, scope, expires, accessToken, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [session.id, session.shop, session.state, session.isOnline, session.scope, session.expires, session.accessToken, session.userId],
+          function(err) {
+            if (err) reject(err);
+            else resolve(true);
+          }
+        );
+      });
     },
     loadSession: async (id) => {
-      // Load session from database
-      console.log('Loading session:', id);
-      return null;
+      // Load session from SQLite database
+      const db = require('sqlite3').Database;
+      const sessionDb = new db('sessions.sqlite');
+      
+      return new Promise((resolve, reject) => {
+        sessionDb.get(
+          'SELECT * FROM sessions WHERE id = ?',
+          [id],
+          (err, row) => {
+            if (err) reject(err);
+            else if (row) {
+              resolve({
+                id: row.id,
+                shop: row.shop,
+                state: row.state,
+                isOnline: row.isOnline === 1,
+                scope: row.scope,
+                expires: row.expires,
+                accessToken: row.accessToken,
+                userId: row.userId
+              });
+            } else {
+              resolve(null);
+            }
+          }
+        );
+      });
     },
     deleteSession: async (id) => {
-      // Delete session from database
-      console.log('Deleting session:', id);
+      // Delete session from SQLite database
+      const db = require('sqlite3').Database;
+      const sessionDb = new db('sessions.sqlite');
+      
+      return new Promise((resolve, reject) => {
+        sessionDb.run(
+          'DELETE FROM sessions WHERE id = ?',
+          [id],
+          function(err) {
+            if (err) reject(err);
+            else resolve(true);
+          }
+        );
+      });
     },
   },
 });
@@ -111,22 +179,33 @@ app.get('/api/companies', async (req, res) => {
               externalId
               createdAt
               updatedAt
-              locations {
-                id
-                name
-                address {
-                  address1
-                  city
-                  province
-                  country
-                  zip
+              locations(first: 10) {
+                edges {
+                  node {
+                    id
+                    name
+                    shippingAddress {
+                      address1
+                      city
+                      province
+                      country
+                      zip
+                    }
+                    staffMemberAssignments(first: 10) {
+                      edges {
+                        node {
+                          id
+                          staffMember {
+                            id
+                            firstName
+                            lastName
+                            email
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
-              }
-              staff {
-                id
-                firstName
-                lastName
-                email
               }
             }
           }
@@ -162,20 +241,16 @@ app.get('/api/staff', async (req, res) => {
     const client = new shopify.clients.Graphql({ session });
     
     const query = `
-      query getStaff($first: Int!, $after: String) {
-        staff(first: $first, after: $after) {
+      query getStaffMembers($first: Int!, $after: String) {
+        staffMembers(first: $first, after: $after) {
           edges {
             node {
               id
               firstName
               lastName
               email
-              createdAt
-              updatedAt
-              companies {
-                id
-                name
-              }
+              active
+              isShopOwner
             }
           }
           pageInfo {
@@ -193,7 +268,7 @@ app.get('/api/staff', async (req, res) => {
       }
     });
 
-    res.json(response.body.data.staff);
+    res.json(response.body.data.staffMembers);
   } catch (error) {
     console.error('Error fetching staff:', error);
     res.status(500).json({ error: 'Failed to fetch staff' });
@@ -202,10 +277,10 @@ app.get('/api/staff', async (req, res) => {
 
 app.post('/api/assign', async (req, res) => {
   try {
-    const { staffId, companyId } = req.body;
+    const { staffId, companyLocationId } = req.body;
     
-    if (!staffId || !companyId) {
-      return res.status(400).json({ error: 'staffId and companyId are required' });
+    if (!staffId || !companyLocationId) {
+      return res.status(400).json({ error: 'staffId and companyLocationId are required' });
     }
 
     const session = await shopify.config.sessionStorage.loadSession(req.session.shop);
@@ -216,14 +291,17 @@ app.post('/api/assign', async (req, res) => {
     const client = new shopify.clients.Graphql({ session });
     
     const mutation = `
-      mutation staffAssignToCompany($staffId: ID!, $companyId: ID!) {
-        staffAssignToCompany(staffId: $staffId, companyId: $companyId) {
-          staff {
+      mutation companyLocationAssignStaffMembers($companyLocationId: ID!, $staffMemberIds: [ID!]!) {
+        companyLocationAssignStaffMembers(companyLocationId: $companyLocationId, staffMemberIds: $staffMemberIds) {
+          companyLocationStaffMemberAssignments {
             id
-            firstName
-            lastName
-            email
-            companies {
+            staffMember {
+              id
+              firstName
+              lastName
+              email
+            }
+            companyLocation {
               id
               name
             }
@@ -239,17 +317,17 @@ app.post('/api/assign', async (req, res) => {
     const response = await client.query({
       data: {
         query: mutation,
-        variables: { staffId, companyId }
+        variables: { companyLocationId, staffMemberIds: [staffId] }
       }
     });
 
-    const result = response.body.data.staffAssignToCompany;
+    const result = response.body.data.companyLocationAssignStaffMembers;
     
     if (result.userErrors.length > 0) {
       return res.status(400).json({ error: result.userErrors });
     }
 
-    res.json({ success: true, staff: result.staff });
+    res.json({ success: true, assignment: result.companyLocationStaffMemberAssignments[0] });
   } catch (error) {
     console.error('Error assigning staff:', error);
     res.status(500).json({ error: 'Failed to assign staff' });
@@ -258,10 +336,10 @@ app.post('/api/assign', async (req, res) => {
 
 app.delete('/api/assign', async (req, res) => {
   try {
-    const { staffId, companyId } = req.body;
+    const { assignmentId } = req.body;
     
-    if (!staffId || !companyId) {
-      return res.status(400).json({ error: 'staffId and companyId are required' });
+    if (!assignmentId) {
+      return res.status(400).json({ error: 'assignmentId is required' });
     }
 
     const session = await shopify.config.sessionStorage.loadSession(req.session.shop);
@@ -272,18 +350,9 @@ app.delete('/api/assign', async (req, res) => {
     const client = new shopify.clients.Graphql({ session });
     
     const mutation = `
-      mutation staffRemoveFromCompany($staffId: ID!, $companyId: ID!) {
-        staffRemoveFromCompany(staffId: $staffId, companyId: $companyId) {
-          staff {
-            id
-            firstName
-            lastName
-            email
-            companies {
-              id
-              name
-            }
-          }
+      mutation companyLocationRemoveStaffMembers($companyLocationStaffMemberAssignmentIds: [ID!]!) {
+        companyLocationRemoveStaffMembers(companyLocationStaffMemberAssignmentIds: $companyLocationStaffMemberAssignmentIds) {
+          deletedCompanyLocationStaffMemberAssignmentIds
           userErrors {
             field
             message
@@ -295,17 +364,17 @@ app.delete('/api/assign', async (req, res) => {
     const response = await client.query({
       data: {
         query: mutation,
-        variables: { staffId, companyId }
+        variables: { companyLocationStaffMemberAssignmentIds: [assignmentId] }
       }
     });
 
-    const result = response.body.data.staffRemoveFromCompany;
+    const result = response.body.data.companyLocationRemoveStaffMembers;
     
     if (result.userErrors.length > 0) {
       return res.status(400).json({ error: result.userErrors });
     }
 
-    res.json({ success: true, staff: result.staff });
+    res.json({ success: true, deletedIds: result.deletedCompanyLocationStaffMemberAssignmentIds });
   } catch (error) {
     console.error('Error removing staff:', error);
     res.status(500).json({ error: 'Failed to remove staff' });
@@ -336,15 +405,19 @@ app.post('/api/bulk-assign', async (req, res) => {
             node {
               id
               name
-              locations {
-                id
-                name
-                address {
-                  address1
-                  city
-                  province
-                  country
-                  zip
+              locations(first: 10) {
+                edges {
+                  node {
+                    id
+                    name
+                    shippingAddress {
+                      address1
+                      city
+                      province
+                      country
+                      zip
+                    }
+                  }
                 }
               }
             }
@@ -374,51 +447,64 @@ app.post('/api/bulk-assign', async (req, res) => {
       cursor = response.body.data.companies.pageInfo.endCursor;
     }
 
-    // Filter companies by location criteria
-    const filteredCompanies = allCompanies.filter(company => {
-      if (!company.locations || company.locations.length === 0) return false;
-      
-      return company.locations.some(location => {
-        const address = location.address;
-        if (!address) return false;
-        
-        // Check various location criteria
-        if (locationCriteria.state && address.province) {
-          return address.province.toLowerCase().includes(locationCriteria.state.toLowerCase());
-        }
-        if (locationCriteria.city && address.city) {
-          return address.city.toLowerCase().includes(locationCriteria.city.toLowerCase());
-        }
-        if (locationCriteria.zip && address.zip) {
-          return address.zip.includes(locationCriteria.zip);
-        }
-        if (locationCriteria.country && address.country) {
-          return address.country.toLowerCase().includes(locationCriteria.country.toLowerCase());
-        }
-        
-        return false;
-      });
+    // Filter company locations by location criteria
+    const filteredLocations = [];
+    allCompanies.forEach(company => {
+      if (company.locations && company.locations.edges) {
+        company.locations.edges.forEach(locationEdge => {
+          const location = locationEdge.node;
+          const address = location.shippingAddress;
+          if (!address) return;
+          
+          // Check various location criteria
+          let matches = false;
+          if (locationCriteria.state && address.province) {
+            matches = address.province.toLowerCase().includes(locationCriteria.state.toLowerCase());
+          }
+          if (locationCriteria.city && address.city) {
+            matches = matches || address.city.toLowerCase().includes(locationCriteria.city.toLowerCase());
+          }
+          if (locationCriteria.zip && address.zip) {
+            matches = matches || address.zip.includes(locationCriteria.zip);
+          }
+          if (locationCriteria.country && address.country) {
+            matches = matches || address.country.toLowerCase().includes(locationCriteria.country.toLowerCase());
+          }
+          
+          if (matches) {
+            filteredLocations.push({
+              id: location.id,
+              name: location.name,
+              companyName: company.name,
+              address: address
+            });
+          }
+        });
+      }
     });
 
-    if (filteredCompanies.length === 0) {
+    if (filteredLocations.length === 0) {
       return res.json({ 
         success: false, 
-        message: 'No companies found matching the location criteria',
+        message: 'No company locations found matching the location criteria',
         assigned: 0,
         total: 0
       });
     }
 
-    // Assign staff to all filtered companies
+    // Assign staff to all filtered company locations
     const assignmentMutation = `
-      mutation staffAssignToCompany($staffId: ID!, $companyId: ID!) {
-        staffAssignToCompany(staffId: $staffId, companyId: $companyId) {
-          staff {
+      mutation companyLocationAssignStaffMembers($companyLocationId: ID!, $staffMemberIds: [ID!]!) {
+        companyLocationAssignStaffMembers(companyLocationId: $companyLocationId, staffMemberIds: $staffMemberIds) {
+          companyLocationStaffMemberAssignments {
             id
-            firstName
-            lastName
-            email
-            companies {
+            staffMember {
+              id
+              firstName
+              lastName
+              email
+            }
+            companyLocation {
               id
               name
             }
@@ -435,21 +521,21 @@ app.post('/api/bulk-assign', async (req, res) => {
     let errorCount = 0;
     const errors = [];
 
-    for (const company of filteredCompanies) {
+    for (const location of filteredLocations) {
       try {
         const response = await client.query({
           data: {
             query: assignmentMutation,
-            variables: { staffId, companyId: company.id }
+            variables: { companyLocationId: location.id, staffMemberIds: [staffId] }
           }
         });
 
-        const result = response.body.data.staffAssignToCompany;
+        const result = response.body.data.companyLocationAssignStaffMembers;
         
         if (result.userErrors.length > 0) {
           errorCount++;
           errors.push({
-            company: company.name,
+            location: `${location.name} (${location.companyName})`,
             errors: result.userErrors
           });
         } else {
@@ -458,7 +544,7 @@ app.post('/api/bulk-assign', async (req, res) => {
       } catch (error) {
         errorCount++;
         errors.push({
-          company: company.name,
+          location: `${location.name} (${location.companyName})`,
           errors: [{ message: error.message }]
         });
       }
@@ -466,9 +552,9 @@ app.post('/api/bulk-assign', async (req, res) => {
 
     res.json({
       success: successCount > 0,
-      message: `Assigned to ${successCount} out of ${filteredCompanies.length} companies`,
+      message: `Assigned to ${successCount} out of ${filteredLocations.length} company locations`,
       assigned: successCount,
-      total: filteredCompanies.length,
+      total: filteredLocations.length,
       errors: errors.length > 0 ? errors : undefined
     });
 
@@ -504,22 +590,33 @@ app.post('/api/companies-by-location', async (req, res) => {
               externalId
               createdAt
               updatedAt
-              locations {
-                id
-                name
-                address {
-                  address1
-                  city
-                  province
-                  country
-                  zip
+              locations(first: 10) {
+                edges {
+                  node {
+                    id
+                    name
+                    shippingAddress {
+                      address1
+                      city
+                      province
+                      country
+                      zip
+                    }
+                    staffMemberAssignments(first: 10) {
+                      edges {
+                        node {
+                          id
+                          staffMember {
+                            id
+                            firstName
+                            lastName
+                            email
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
-              }
-              staff {
-                id
-                firstName
-                lastName
-                email
               }
             }
           }
@@ -548,35 +645,44 @@ app.post('/api/companies-by-location', async (req, res) => {
       cursor = response.body.data.companies.pageInfo.endCursor;
     }
 
-    // Filter companies by location criteria
-    const filteredCompanies = allCompanies.filter(company => {
-      if (!company.locations || company.locations.length === 0) return false;
-      
-      return company.locations.some(location => {
-        const address = location.address;
-        if (!address) return false;
-        
-        // Check various location criteria
-        if (locationCriteria.state && address.province) {
-          return address.province.toLowerCase().includes(locationCriteria.state.toLowerCase());
-        }
-        if (locationCriteria.city && address.city) {
-          return address.city.toLowerCase().includes(locationCriteria.city.toLowerCase());
-        }
-        if (locationCriteria.zip && address.zip) {
-          return address.zip.includes(locationCriteria.zip);
-        }
-        if (locationCriteria.country && address.country) {
-          return address.country.toLowerCase().includes(locationCriteria.country.toLowerCase());
-        }
-        
-        return false;
-      });
+    // Filter company locations by location criteria
+    const filteredLocations = [];
+    allCompanies.forEach(company => {
+      if (company.locations && company.locations.edges) {
+        company.locations.edges.forEach(locationEdge => {
+          const location = locationEdge.node;
+          const address = location.shippingAddress;
+          if (!address) return;
+          
+          // Check various location criteria
+          let matches = false;
+          if (locationCriteria.state && address.province) {
+            matches = address.province.toLowerCase().includes(locationCriteria.state.toLowerCase());
+          }
+          if (locationCriteria.city && address.city) {
+            matches = matches || address.city.toLowerCase().includes(locationCriteria.city.toLowerCase());
+          }
+          if (locationCriteria.zip && address.zip) {
+            matches = matches || address.zip.includes(locationCriteria.zip);
+          }
+          if (locationCriteria.country && address.country) {
+            matches = matches || address.country.toLowerCase().includes(locationCriteria.country.toLowerCase());
+          }
+          
+          if (matches) {
+            filteredLocations.push({
+              ...location,
+              companyName: company.name,
+              companyId: company.id
+            });
+          }
+        });
+      }
     });
 
     res.json({
-      companies: filteredCompanies,
-      total: filteredCompanies.length,
+      locations: filteredLocations,
+      total: filteredLocations.length,
       criteria: locationCriteria
     });
 

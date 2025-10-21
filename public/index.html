@@ -284,7 +284,7 @@
                 <h2>🔗 Staff Assignments</h2>
                 <div class="grid">
                     <div>
-                        <h3>Assign Staff to Company</h3>
+                        <h3>Assign Staff to Company Location</h3>
                         <form id="assign-form">
                             <div class="form-group">
                                 <label for="assign-staff-select">Select Staff:</label>
@@ -293,16 +293,16 @@
                                 </select>
                             </div>
                             <div class="form-group">
-                                <label for="assign-company-select">Select Company:</label>
+                                <label for="assign-company-select">Select Company Location:</label>
                                 <select id="assign-company-select" required>
-                                    <option value="">Loading companies...</option>
+                                    <option value="">Loading company locations...</option>
                                 </select>
                             </div>
                             <button type="submit" class="btn btn-success">Assign Staff</button>
                         </form>
                     </div>
                     <div>
-                        <h3>Remove Staff from Company</h3>
+                        <h3>Remove Staff from Company Location</h3>
                         <form id="remove-form">
                             <div class="form-group">
                                 <label for="remove-staff-select">Select Staff:</label>
@@ -311,7 +311,7 @@
                                 </select>
                             </div>
                             <div class="form-group">
-                                <label for="remove-company-select">Select Company:</label>
+                                <label for="remove-company-select">Select Company Location:</label>
                                 <select id="remove-company-select" required>
                                     <option value="">Select staff first</option>
                                 </select>
@@ -325,11 +325,11 @@
             <!-- Bulk Assignment Tab -->
             <div id="bulk-assign" class="tab-content">
                 <h2>🎯 Bulk Assignment by Location</h2>
-                <p>Assign a staff member to ALL companies in a specific location (e.g., all companies in Michigan)</p>
+                <p>Assign a staff member to ALL company locations in a specific location (e.g., all company locations in Michigan)</p>
                 
                 <div class="grid">
                     <div>
-                        <h3>Preview Companies by Location</h3>
+                        <h3>Preview Company Locations by Location</h3>
                         <form id="preview-form">
                             <div class="form-group">
                                 <label for="preview-state">State/Province:</label>
@@ -439,20 +439,44 @@
                 return;
             }
 
-            content.innerHTML = companies.map(company => `
-                <div class="list-item">
-                    <h3>${company.name}</h3>
-                    <p><strong>ID:</strong> ${company.id}</p>
-                    <p><strong>External ID:</strong> ${company.externalId || 'N/A'}</p>
-                    <p><strong>Created:</strong> ${new Date(company.createdAt).toLocaleDateString()}</p>
-                    ${company.locations && company.locations.length > 0 ? `
-                        <p><strong>Locations:</strong> ${company.locations.length}</p>
-                    ` : ''}
-                    ${company.staff && company.staff.length > 0 ? `
-                        <p><strong>Staff:</strong> ${company.staff.length} assigned</p>
-                    ` : ''}
-                </div>
-            `).join('');
+            content.innerHTML = companies.map(company => {
+                const locationsCount = company.locations && company.locations.edges ? company.locations.edges.length : 0;
+                const totalStaffAssignments = company.locations && company.locations.edges ? 
+                    company.locations.edges.reduce((total, locationEdge) => {
+                        return total + (locationEdge.node.staffMemberAssignments && locationEdge.node.staffMemberAssignments.edges ? 
+                            locationEdge.node.staffMemberAssignments.edges.length : 0);
+                    }, 0) : 0;
+
+                return `
+                    <div class="list-item">
+                        <h3>${company.name}</h3>
+                        <p><strong>ID:</strong> ${company.id}</p>
+                        <p><strong>External ID:</strong> ${company.externalId || 'N/A'}</p>
+                        <p><strong>Created:</strong> ${new Date(company.createdAt).toLocaleDateString()}</p>
+                        <p><strong>Locations:</strong> ${locationsCount}</p>
+                        <p><strong>Staff Assignments:</strong> ${totalStaffAssignments}</p>
+                        ${company.locations && company.locations.edges ? `
+                            <details style="margin-top: 10px;">
+                                <summary>View Locations</summary>
+                                ${company.locations.edges.map(locationEdge => {
+                                    const location = locationEdge.node;
+                                    const staffCount = location.staffMemberAssignments && location.staffMemberAssignments.edges ? 
+                                        location.staffMemberAssignments.edges.length : 0;
+                                    return `
+                                        <div style="margin: 10px 0; padding: 10px; background: #f0f0f0; border-radius: 4px;">
+                                            <strong>${location.name}</strong>
+                                            ${location.shippingAddress ? `
+                                                <p><strong>Address:</strong> ${location.shippingAddress.address1}, ${location.shippingAddress.city}, ${location.shippingAddress.province} ${location.shippingAddress.zip}</p>
+                                            ` : ''}
+                                            <p><strong>Staff Assigned:</strong> ${staffCount}</p>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </details>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
         }
 
         // Load staff
@@ -488,10 +512,8 @@
                     <h3>${member.firstName} ${member.lastName}</h3>
                     <p><strong>Email:</strong> ${member.email}</p>
                     <p><strong>ID:</strong> ${member.id}</p>
-                    <p><strong>Created:</strong> ${new Date(member.createdAt).toLocaleDateString()}</p>
-                    ${member.companies && member.companies.length > 0 ? `
-                        <p><strong>Companies:</strong> ${member.companies.map(c => c.name).join(', ')}</p>
-                    ` : '<p><strong>Companies:</strong> None assigned</p>'}
+                    <p><strong>Active:</strong> ${member.active ? 'Yes' : 'No'}</p>
+                    <p><strong>Shop Owner:</strong> ${member.isShopOwner ? 'Yes' : 'No'}</p>
                 </div>
             `).join('');
         }
@@ -503,34 +525,57 @@
             assignStaffSelect.innerHTML = '<option value="">Select staff member</option>' +
                 staff.map(member => `<option value="${member.id}">${member.firstName} ${member.lastName} (${member.email})</option>`).join('');
 
-            // Remove staff select
+            // Remove staff select - we'll populate this dynamically based on assignments
             const removeStaffSelect = document.getElementById('remove-staff-select');
-            const assignedStaff = staff.filter(member => member.companies && member.companies.length > 0);
-            removeStaffSelect.innerHTML = '<option value="">Select staff member</option>' +
-                assignedStaff.map(member => `<option value="${member.id}">${member.firstName} ${member.lastName} (${member.email})</option>`).join('');
+            removeStaffSelect.innerHTML = '<option value="">Select staff member</option>';
 
             // Bulk staff select
             const bulkStaffSelect = document.getElementById('bulk-staff-select');
             bulkStaffSelect.innerHTML = '<option value="">Select staff member</option>' +
                 staff.map(member => `<option value="${member.id}">${member.firstName} ${member.lastName} (${member.email})</option>`).join('');
 
-            // Company selects
+            // Company location selects - populate with all company locations
             const assignCompanySelect = document.getElementById('assign-company-select');
             const removeCompanySelect = document.getElementById('remove-company-select');
             
-            assignCompanySelect.innerHTML = '<option value="">Select company</option>' +
-                companies.map(company => `<option value="${company.id}">${company.name}</option>`).join('');
+            assignCompanySelect.innerHTML = '<option value="">Select company location</option>';
+            removeCompanySelect.innerHTML = '<option value="">Select company location</option>';
+
+            // Populate with company locations
+            companies.forEach(company => {
+                if (company.locations && company.locations.edges) {
+                    company.locations.edges.forEach(locationEdge => {
+                        const location = locationEdge.node;
+                        const optionText = `${location.name} (${company.name})`;
+                        assignCompanySelect.innerHTML += `<option value="${location.id}">${optionText}</option>`;
+                        removeCompanySelect.innerHTML += `<option value="${location.id}">${optionText}</option>`;
+                    });
+                }
+            });
 
             // Update remove company select when staff is selected
             removeStaffSelect.addEventListener('change', function() {
                 const selectedStaffId = this.value;
-                const selectedStaff = staff.find(member => member.id === selectedStaffId);
                 
-                removeCompanySelect.innerHTML = '<option value="">Select company</option>';
+                removeCompanySelect.innerHTML = '<option value="">Select company location</option>';
                 
-                if (selectedStaff && selectedStaff.companies) {
-                    selectedStaff.companies.forEach(company => {
-                        removeCompanySelect.innerHTML += `<option value="${company.id}">${company.name}</option>`;
+                if (selectedStaffId) {
+                    // Find assignments for this staff member
+                    companies.forEach(company => {
+                        if (company.locations && company.locations.edges) {
+                            company.locations.edges.forEach(locationEdge => {
+                                const location = locationEdge.node;
+                                if (location.staffMemberAssignments && location.staffMemberAssignments.edges) {
+                                    const hasAssignment = location.staffMemberAssignments.edges.some(assignmentEdge => 
+                                        assignmentEdge.node.staffMember.id === selectedStaffId
+                                    );
+                                    if (hasAssignment) {
+                                        const optionText = `${location.name} (${company.name})`;
+                                        removeCompanySelect.innerHTML += `<option value="${location.id}">${optionText}</option>`;
+                                    }
+                                }
+                            });
+                        }
                     });
                 }
             });
@@ -560,8 +605,14 @@
             document.getElementById('companies-count').textContent = companies.length;
             document.getElementById('staff-count').textContent = staff.length;
             
-            const assignmentsCount = staff.reduce((count, member) => {
-                return count + (member.companies ? member.companies.length : 0);
+            const assignmentsCount = companies.reduce((count, company) => {
+                if (company.locations && company.locations.edges) {
+                    return count + company.locations.edges.reduce((locationCount, locationEdge) => {
+                        return locationCount + (locationEdge.node.staffMemberAssignments && locationEdge.node.staffMemberAssignments.edges ? 
+                            locationEdge.node.staffMemberAssignments.edges.length : 0);
+                    }, 0);
+                }
+                return count;
             }, 0);
             document.getElementById('assignments-count').textContent = assignmentsCount;
         }
@@ -595,10 +646,10 @@
             e.preventDefault();
             
             const staffId = document.getElementById('assign-staff-select').value;
-            const companyId = document.getElementById('assign-company-select').value;
+            const companyLocationId = document.getElementById('assign-company-select').value;
             
-            if (!staffId || !companyId) {
-                showError('Please select both staff member and company');
+            if (!staffId || !companyLocationId) {
+                showError('Please select both staff member and company location');
                 return;
             }
             
@@ -608,7 +659,7 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ staffId, companyId })
+                    body: JSON.stringify({ staffId, companyLocationId })
                 });
                 
                 const data = await response.json();
@@ -616,8 +667,8 @@
                 if (response.ok) {
                     showSuccess('Staff assigned successfully!');
                     // Refresh data
-                    staff = [];
-                    await loadStaff();
+                    companies = [];
+                    await loadCompanies();
                 } else {
                     showError('Failed to assign staff: ' + (data.error.message || data.error));
                 }
@@ -631,10 +682,33 @@
             e.preventDefault();
             
             const staffId = document.getElementById('remove-staff-select').value;
-            const companyId = document.getElementById('remove-company-select').value;
+            const companyLocationId = document.getElementById('remove-company-select').value;
             
-            if (!staffId || !companyId) {
-                showError('Please select both staff member and company');
+            if (!staffId || !companyLocationId) {
+                showError('Please select both staff member and company location');
+                return;
+            }
+            
+            // Find the assignment ID
+            let assignmentId = null;
+            companies.forEach(company => {
+                if (company.locations && company.locations.edges) {
+                    company.locations.edges.forEach(locationEdge => {
+                        const location = locationEdge.node;
+                        if (location.id === companyLocationId && location.staffMemberAssignments && location.staffMemberAssignments.edges) {
+                            const assignment = location.staffMemberAssignments.edges.find(assignmentEdge => 
+                                assignmentEdge.node.staffMember.id === staffId
+                            );
+                            if (assignment) {
+                                assignmentId = assignment.node.id;
+                            }
+                        }
+                    });
+                }
+            });
+            
+            if (!assignmentId) {
+                showError('Assignment not found');
                 return;
             }
             
@@ -644,7 +718,7 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ staffId, companyId })
+                    body: JSON.stringify({ assignmentId })
                 });
                 
                 const data = await response.json();
@@ -652,8 +726,8 @@
                 if (response.ok) {
                     showSuccess('Staff removed successfully!');
                     // Refresh data
-                    staff = [];
-                    await loadStaff();
+                    companies = [];
+                    await loadCompanies();
                 } else {
                     showError('Failed to remove staff: ' + (data.error.message || data.error));
                 }
@@ -692,21 +766,18 @@
                 if (response.ok) {
                     const resultsDiv = document.getElementById('preview-results');
                     
-                    if (data.companies.length === 0) {
-                        resultsDiv.innerHTML = '<div class="error">No companies found matching the location criteria.</div>';
+                    if (data.locations.length === 0) {
+                        resultsDiv.innerHTML = '<div class="error">No company locations found matching the location criteria.</div>';
                     } else {
                         resultsDiv.innerHTML = `
-                            <div class="success">Found ${data.companies.length} companies matching your criteria:</div>
+                            <div class="success">Found ${data.locations.length} company locations matching your criteria:</div>
                             <div style="max-height: 300px; overflow-y: auto; margin-top: 10px;">
-                                ${data.companies.map(company => `
+                                ${data.locations.map(location => `
                                     <div class="list-item" style="margin-bottom: 10px;">
-                                        <h4>${company.name}</h4>
-                                        ${company.locations.map(location => `
-                                            <p><strong>Location:</strong> ${location.name}</p>
-                                            ${location.address ? `
-                                                <p><strong>Address:</strong> ${location.address.address1}, ${location.address.city}, ${location.address.province} ${location.address.zip}</p>
-                                            ` : ''}
-                                        `).join('')}
+                                        <h4>${location.name} (${location.companyName})</h4>
+                                        ${location.shippingAddress ? `
+                                            <p><strong>Address:</strong> ${location.shippingAddress.address1}, ${location.shippingAddress.city}, ${location.shippingAddress.province} ${location.shippingAddress.zip}</p>
+                                        ` : ''}
                                     </div>
                                 `).join('')}
                             </div>
@@ -744,7 +815,7 @@
             
             const selectedStaff = staff.find(member => member.id === staffId);
             
-            if (!confirm(`Are you sure you want to assign ${selectedStaff.firstName} ${selectedStaff.lastName} to ALL companies matching your location criteria?\n\nThis action cannot be undone easily.`)) {
+            if (!confirm(`Are you sure you want to assign ${selectedStaff.firstName} ${selectedStaff.lastName} to ALL company locations matching your location criteria?\n\nThis action cannot be undone easily.`)) {
                 return;
             }
             
@@ -766,14 +837,14 @@
                         resultsDiv.innerHTML = `
                             <div class="success">
                                 ✅ Bulk assignment completed!<br>
-                                Assigned to ${data.assigned} out of ${data.total} companies
+                                Assigned to ${data.assigned} out of ${data.total} company locations
                             </div>
                         `;
-                        showSuccess(`Successfully assigned ${selectedStaff.firstName} ${selectedStaff.lastName} to ${data.assigned} companies!`);
+                        showSuccess(`Successfully assigned ${selectedStaff.firstName} ${selectedStaff.lastName} to ${data.assigned} company locations!`);
                         
-                        // Refresh staff data
-                        staff = [];
-                        await loadStaff();
+                        // Refresh company data
+                        companies = [];
+                        await loadCompanies();
                     } else {
                         resultsDiv.innerHTML = `<div class="error">❌ ${data.message}</div>`;
                     }
@@ -784,7 +855,7 @@
                                 <h4>Errors encountered:</h4>
                                 ${data.errors.map(error => `
                                     <div style="background: #f8d7da; padding: 10px; margin: 5px 0; border-radius: 4px;">
-                                        <strong>${error.company}:</strong> ${error.errors.map(e => e.message).join(', ')}
+                                        <strong>${error.location}:</strong> ${error.errors.map(e => e.message).join(', ')}
                                     </div>
                                 `).join('')}
                             </div>
