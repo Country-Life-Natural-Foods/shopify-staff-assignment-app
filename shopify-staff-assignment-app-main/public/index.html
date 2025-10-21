@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shopify Staff Assignment App</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .feature {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+        .btn {
+            background: #007cba;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin: 5px;
+        }
+        .btn:hover {
+            background: #005a87;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Shopify Staff Assignment App</h1>
+        <p>A complete Shopify app for managing staff assignments to company locations.</p>
+        
+        <div class="feature">
+            <h3>🚀 Quick Start</h3>
+            <p>1. Install Dependencies: <code>npm install</code></p>
+            <p>2. Configure Environment: Create a <code>.env</code> file</p>
+            <p>3. Start Development Server: <code>npm run dev</code></p>
+            <p>4. Install App in Shopify Store</p>
+        </div>
+
+        <div class="feature">
+            <h3>📱 App Features</h3>
+            <ul>
+                <li><strong>Staff Management:</strong> View and manage all staff members</li>
+                <li><strong>Company Management:</strong> View and manage company locations</li>
+                <li><strong>Assignment Management:</strong> Assign/remove staff from companies</li>
+                <li><strong>Interactive Interface:</strong> User-friendly web interface</li>
+                <li><strong>Real-time Updates:</strong> Live data from Shopify Admin API</li>
+            </ul>
+        </div>
+
+        <div class="feature">
+            <h3>🛠️ Development</h3>
+            <p>This app provides a complete solution for managing staff assignments within Shopify stores.</p>
+            <a href="/auth" class="btn">Authenticate with Shopify</a>
+            <a href="/api/companies" class="btn">View Companies</a>
+            <a href="/api/staff" class="btn">View Staff</a>
+        </div>
+
+        <div class="feature">
+            <h3>🔧 Configuration</h3>
+            <p><strong>Required App Scopes:</strong></p>
+            <ul>
+                <li><code>read_companies</code></li>
+                <li><code>write_companies</code></li>
+                <li><code>read_customers</code></li>
+                <li><code>write_customers</code></li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
