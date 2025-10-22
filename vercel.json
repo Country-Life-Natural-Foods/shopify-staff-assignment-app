@@ -1,23 +1,13 @@
 {
   "functions": {
-    "api/index.js": {
-      "maxDuration": 30
-    },
-    "api/test.js": {
-      "maxDuration": 30
-    },
-    "api/health.js": {
+    "index.js": {
       "maxDuration": 30
     }
   },
   "rewrites": [
     {
-      "source": "/",
-      "destination": "/api/index.js"
-    },
-    {
-      "source": "/api",
-      "destination": "/api/index.js"
+      "source": "/(.*)",
+      "destination": "/index.js"
     }
   ]
 }
