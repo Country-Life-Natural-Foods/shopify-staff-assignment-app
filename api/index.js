@@ -21,6 +21,9 @@ process.env.SHOPIFY_HOSTNAME = process.env.SHOPIFY_HOSTNAME || 'localhost';
 process.env.SHOPIFY_HOST = process.env.SHOPIFY_HOSTNAME || 'localhost';
 process.env.SHOPIFY_API_VERSION = '2024-07';
 
+// Set the hostName environment variable that shopifyApp expects
+process.env.SHOPIFY_HOST_NAME = process.env.SHOPIFY_HOSTNAME || 'localhost';
+
 // Debug environment variables
 console.log('Environment variables:');
 console.log('SHOPIFY_API_KEY:', process.env.SHOPIFY_API_KEY ? 'SET' : 'NOT SET');
@@ -265,7 +268,12 @@ const { shopifyApp } = require('@shopify/shopify-app-express');
 
 // Initialize Shopify App with proper authentication
 const shopifyAppMiddleware = shopifyApp({
-  shopifyApi: shopify,
+  apiKey: process.env.SHOPIFY_API_KEY,
+  apiSecretKey: process.env.SHOPIFY_API_SECRET,
+  scopes: ['read_companies', 'write_companies'],
+  hostName: process.env.SHOPIFY_HOSTNAME || 'localhost',
+  apiVersion: ApiVersion.July24,
+  isEmbeddedApp: true,
   auth: {
     path: '/auth',
     callbackPath: '/auth/callback',
