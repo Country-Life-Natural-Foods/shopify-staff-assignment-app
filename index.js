@@ -46,7 +46,7 @@ export default async function handler(req, res) {
 
     // Default response for any other path
     return res.status(200).json({
-      message: '🚀 Shopify Staff Assignment App API is running!',
+      message: '🚀 Shopify Staff Assignment App API is running! (Redeployed)',
       timestamp: new Date().toISOString(),
       method: req.method,
       url: req.url,
