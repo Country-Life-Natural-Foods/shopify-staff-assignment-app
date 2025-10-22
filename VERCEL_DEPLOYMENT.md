@@ -23,14 +23,13 @@ This guide will help you deploy your Shopify Staff Assignment App to Vercel for 
 
 ### Step 1: Prepare Your Code
 
-1. **Use the production server**:
+1. **Ensure your code is ready**:
    ```bash
-   cp server-production.js server.js
-   ```
-
-2. **Update package.json** for production:
-   ```bash
-   cp package-production.json package.json
+   # Install dependencies
+   npm install
+   
+   # Test locally
+   npm run dev
    ```
 
 ### Step 2: Push to GitHub
@@ -71,6 +70,7 @@ This guide will help you deploy your Shopify Staff Assignment App to Vercel for 
    - **Build Command**: `npm install`
    - **Output Directory**: Leave empty
    - **Install Command**: `npm install`
+   - **Development Command**: `npm run dev`
 
 4. **Add Environment Variables**:
    ```

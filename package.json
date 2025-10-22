@@ -5,7 +5,7 @@
   "main": "api/index.js",
   "scripts": {
     "start": "node api/index.js",
-    "dev": "nodemon api/index.js",
+    "dev": "vercel dev",
     "build": "npm install",
     "deploy": "vercel --prod"
   },
@@ -24,7 +24,7 @@
     "sqlite3": "^5.1.6"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1"
+    "vercel": "^32.0.0"
   },
   "keywords": [
     "shopify",

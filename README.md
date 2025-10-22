@@ -1,6 +1,6 @@
 # Shopify Staff Assignment App
 
-A complete Shopify app for managing staff assignments to company locations.
+A complete Shopify app for managing staff assignments to company locations, deployed on Vercel.
 
 ## 🚀 Quick Start
 
@@ -20,10 +20,7 @@ SHOPIFY_API_SECRET=your_api_secret_here
 # Your app's URL (use ngrok for local development)
 SHOPIFY_APP_URL=https://your-app-url.ngrok.io
 
-# Database configuration
-DATABASE_URL=./database.sqlite
-
-# Session secret
+# Session secret (generate a random string)
 SESSION_SECRET=your_session_secret_here
 ```
 
@@ -94,20 +91,27 @@ Configure these in your Partner Dashboard:
 - **Allowed redirection URLs**: `{APP_URL}/auth/callback`
 - **Webhook endpoints**: Configure as needed
 
-## 📦 Deployment
+## 📦 Deployment to Vercel
 
 ### Deploy to Production
 
-1. **Set up production environment**:
-   ```bash
-   # Set production environment variables
-   export NODE_ENV=production
-   export SHOPIFY_API_KEY=your_production_api_key
-   export SHOPIFY_API_SECRET=your_production_api_secret
-   export SHOPIFY_APP_URL=https://your-production-domain.com
+1. **Push your code to GitHub**
+
+2. **Connect to Vercel**:
+   - Go to [vercel.com](https://vercel.com)
+   - Import your GitHub repository
+   - Vercel will auto-detect it's a Node.js app
+
+3. **Configure Environment Variables** in Vercel dashboard:
+   ```
+   SHOPIFY_API_KEY=your_production_api_key
+   SHOPIFY_API_SECRET=your_production_api_secret
+   SHOPIFY_APP_URL=https://your-app-name.vercel.app
+   SESSION_SECRET=your_strong_session_secret
+   NODE_ENV=production
    ```
 
-2. **Deploy your app**:
+4. **Deploy**:
    ```bash
    npm run deploy
    ```
@@ -119,7 +123,6 @@ Configure these in your Partner Dashboard:
 | `SHOPIFY_API_KEY` | Your app's API key | Yes |
 | `SHOPIFY_API_SECRET` | Your app's API secret | Yes |
 | `SHOPIFY_APP_URL` | Your app's URL | Yes |
-| `DATABASE_URL` | Database connection string | Yes |
 | `SESSION_SECRET` | Session encryption secret | Yes |
 
 ## 🛡️ Security
@@ -136,3 +139,9 @@ For issues or questions:
 1. Check the troubleshooting section
 2. Review Shopify app development documentation
 3. Check your app's logs for errors
+
+## 📚 Additional Documentation
+
+- [VERCEL_DEPLOYMENT.md](./VERCEL_DEPLOYMENT.md) - Detailed Vercel deployment guide
+- [SETUP_GUIDE.md](./SETUP_GUIDE.md) - Complete setup instructions
+- [QUICK_START.md](./QUICK_START.md) - 5-minute quick start guide
