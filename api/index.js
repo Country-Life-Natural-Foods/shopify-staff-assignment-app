@@ -16,6 +16,19 @@ const { createClient } = require('redis');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 require('@shopify/shopify-api/adapters/node');
 
+// Set required environment variables for Shopify API
+process.env.SHOPIFY_HOSTNAME = process.env.SHOPIFY_HOSTNAME || 'localhost';
+process.env.SHOPIFY_HOST = process.env.SHOPIFY_HOSTNAME || 'localhost';
+process.env.SHOPIFY_API_VERSION = '2024-07';
+
+// Debug environment variables
+console.log('Environment variables:');
+console.log('SHOPIFY_API_KEY:', process.env.SHOPIFY_API_KEY ? 'SET' : 'NOT SET');
+console.log('SHOPIFY_API_SECRET:', process.env.SHOPIFY_API_SECRET ? 'SET' : 'NOT SET');
+console.log('SHOPIFY_HOSTNAME:', process.env.SHOPIFY_HOSTNAME);
+console.log('SHOPIFY_HOST:', process.env.SHOPIFY_HOST);
+console.log('SHOPIFY_APP_URL:', process.env.SHOPIFY_APP_URL);
+
 // Set environment variables if not loaded from .env
 if (!process.env.SHOPIFY_API_KEY || !process.env.SHOPIFY_API_SECRET) {
   console.error('Missing required environment variables: SHOPIFY_API_KEY and SHOPIFY_API_SECRET');
@@ -241,16 +254,18 @@ const shopify = shopifyApi({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET,
   scopes: ['read_companies', 'write_companies'],
-  hostName: process.env.SHOPIFY_APP_URL ? new URL(process.env.SHOPIFY_APP_URL).host : 'localhost:3000',
-  apiVersion: '2025-01',
+  hostName: process.env.SHOPIFY_HOSTNAME || 'localhost',
+  apiVersion: ApiVersion.July24,
   isEmbeddedApp: true,
 });
+
+console.log('Shopify API configured with hostName:', process.env.SHOPIFY_HOSTNAME || 'localhost');
 
 const { shopifyApp } = require('@shopify/shopify-app-express');
 
 // Initialize Shopify App with proper authentication
 const shopifyAppMiddleware = shopifyApp({
-  api: shopify,
+  shopifyApi: shopify,
   auth: {
     path: '/auth',
     callbackPath: '/auth/callback',

@@ -10,7 +10,7 @@
     "deploy": "vercel --prod"
   },
   "dependencies": {
-    "@shopify/shopify-api": "^12.1.0",
+    "@shopify/shopify-api": "^11.14.1",
     "@shopify/shopify-app-express": "^5.0.20",
     "axios": "^1.6.0",
     "connect-redis": "^7.1.0",
