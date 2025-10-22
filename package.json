@@ -5,7 +5,7 @@
   "main": "api/index.js",
   "scripts": {
     "start": "node api/index.js",
-    "dev": "vercel dev",
+    "dev": "node api/index.js",
     "build": "npm install",
     "deploy": "vercel --prod"
   },

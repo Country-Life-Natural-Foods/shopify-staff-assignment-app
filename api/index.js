@@ -1,3 +1,5 @@
+// Environment variables will be loaded from .env file
+
 const express = require('express');
 const session = require('express-session');
 const cors = require('cors');
@@ -9,10 +11,30 @@ const sqlite3 = require('sqlite3').verbose();
 const connectSqlite3 = require('connect-sqlite3');
 const connectRedis = require('connect-redis');
 const { createClient } = require('redis');
-require('dotenv').config();
+
+// Load environment variables first
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 require('@shopify/shopify-api/adapters/node');
 
-const { shopifyApi, LATEST_API_VERSION, Session } = require('@shopify/shopify-api');
+// Set environment variables if not loaded from .env
+if (!process.env.SHOPIFY_API_KEY || !process.env.SHOPIFY_API_SECRET) {
+  console.error('Missing required environment variables: SHOPIFY_API_KEY and SHOPIFY_API_SECRET');
+  console.error('Please create a .env file with your Shopify app credentials');
+  process.exit(1);
+}
+
+const { shopifyApi, LATEST_API_VERSION, Session, ApiVersion } = require('@shopify/shopify-api');
+
+// Configure Shopify API globally
+const shopify = shopifyApi({
+  apiKey: process.env.SHOPIFY_API_KEY,
+  apiSecretKey: process.env.SHOPIFY_API_SECRET,
+  scopes: ['read_companies', 'write_companies'],
+  hostName: process.env.SHOPIFY_APP_URL?.replace(/https?:\/\//, '') || 'localhost:3000',
+  apiVersion: ApiVersion.January25,
+  isEmbeddedApp: true,
+});
+
 const { shopifyApp } = require('@shopify/shopify-app-express');
 
 const app = express();
@@ -226,16 +248,6 @@ const redisSessionStorage = {
 
 const shopifySessionStorage = redisClient ? redisSessionStorage : sqliteSessionStorage;
 
-// Initialize Shopify API
-const shopify = shopifyApi({
-  apiKey: process.env.SHOPIFY_API_KEY,
-  apiSecretKey: process.env.SHOPIFY_API_SECRET,
-  scopes: ['read_companies', 'write_companies'],
-  hostName: process.env.SHOPIFY_APP_URL?.replace(/https?:\/\//, '') || 'localhost:3000',
-  apiVersion: LATEST_API_VERSION,
-  isEmbeddedApp: true,
-});
-
 // Initialize Shopify App
 const shopifyAppMiddleware = shopifyApp({
   api: shopify,
@@ -410,7 +422,10 @@ app.get('/api/companies', async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching companies:', error);
-    res.status(500).json({ error: 'Failed to fetch companies' });
+    res.status(500).json({ 
+      error: 'Failed to fetch companies',
+      details: error.message 
+    });
   }
 });
 
@@ -444,7 +459,10 @@ app.get('/api/staff', async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching staff:', error);
-    res.status(500).json({ error: 'Failed to fetch staff' });
+    res.status(500).json({ 
+      error: 'Failed to fetch staff',
+      details: error.message 
+    });
   }
 });
 
@@ -737,6 +755,15 @@ app.use((req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+// Start server for local development
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Health check: http://localhost:${PORT}/health`);
+  });
+}
 
 // Export for Vercel
 module.exports = app;
