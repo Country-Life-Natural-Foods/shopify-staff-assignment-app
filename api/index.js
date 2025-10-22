@@ -25,17 +25,6 @@ if (!process.env.SHOPIFY_API_KEY || !process.env.SHOPIFY_API_SECRET) {
 
 const { shopifyApi, LATEST_API_VERSION, Session, ApiVersion } = require('@shopify/shopify-api');
 
-const { shopifyApp } = require('@shopify/shopify-app-express');
-
-// Configure Shopify API globally
-const hostName = process.env.SHOPIFY_APP_URL ? new URL(process.env.SHOPIFY_APP_URL).host : 'localhost:3000';
-console.log('Environment variables:');
-console.log('SHOPIFY_API_KEY:', process.env.SHOPIFY_API_KEY ? 'SET' : 'NOT SET');
-console.log('SHOPIFY_API_SECRET:', process.env.SHOPIFY_API_SECRET ? 'SET' : 'NOT SET');
-console.log('SHOPIFY_APP_URL:', process.env.SHOPIFY_APP_URL);
-console.log('hostName:', hostName);
-console.log('apiVersion:', ApiVersion.January25);
-
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production';
 const publicDir = path.join(process.cwd(), 'public');
@@ -247,14 +236,21 @@ const redisSessionStorage = {
 
 const shopifySessionStorage = redisClient ? redisSessionStorage : sqliteSessionStorage;
 
-// Initialize Shopify App
-const shopifyAppMiddleware = shopifyApp({
+// Configure Shopify API
+const shopify = shopifyApi({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET,
   scopes: ['read_companies', 'write_companies'],
-  hostName: hostName,
+  hostName: 'localhost:3000',
   apiVersion: '2025-01',
   isEmbeddedApp: true,
+});
+
+const { shopifyApp } = require('@shopify/shopify-app-express');
+
+// Initialize Shopify App
+const shopifyAppMiddleware = shopifyApp({
+  api: shopify,
   auth: {
     path: '/auth',
     callbackPath: '/auth/callback',
@@ -332,16 +328,11 @@ const getGraphqlClient = async (req, res) => {
     return null;
   }
 
-  // Get the Shopify API instance from the app middleware
-  const shopifyApi = res.locals.shopify?.api;
-  if (!shopifyApi) {
-    return null;
-  }
-
-  return new shopifyApi.clients.Graphql({ session: sessionData });
+  return new shopify.clients.Graphql({ session: sessionData });
 };
 
 const fetchAllCompanies = async (client) => {
+  // Use the current B2B API to get companies
   const query = `
     query getCompanies($first: Int!, $after: String) {
       companies(first: $first, after: $after) {
