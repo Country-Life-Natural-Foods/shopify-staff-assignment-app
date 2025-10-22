@@ -25,17 +25,16 @@ if (!process.env.SHOPIFY_API_KEY || !process.env.SHOPIFY_API_SECRET) {
 
 const { shopifyApi, LATEST_API_VERSION, Session, ApiVersion } = require('@shopify/shopify-api');
 
-// Configure Shopify API globally
-const shopify = shopifyApi({
-  apiKey: process.env.SHOPIFY_API_KEY,
-  apiSecretKey: process.env.SHOPIFY_API_SECRET,
-  scopes: ['read_companies', 'write_companies'],
-  hostName: process.env.SHOPIFY_APP_URL?.replace(/https?:\/\//, '') || 'localhost:3000',
-  apiVersion: ApiVersion.January25,
-  isEmbeddedApp: true,
-});
-
 const { shopifyApp } = require('@shopify/shopify-app-express');
+
+// Configure Shopify API globally
+const hostName = process.env.SHOPIFY_APP_URL ? new URL(process.env.SHOPIFY_APP_URL).host : 'localhost:3000';
+console.log('Environment variables:');
+console.log('SHOPIFY_API_KEY:', process.env.SHOPIFY_API_KEY ? 'SET' : 'NOT SET');
+console.log('SHOPIFY_API_SECRET:', process.env.SHOPIFY_API_SECRET ? 'SET' : 'NOT SET');
+console.log('SHOPIFY_APP_URL:', process.env.SHOPIFY_APP_URL);
+console.log('hostName:', hostName);
+console.log('apiVersion:', ApiVersion.January25);
 
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production';
@@ -250,7 +249,12 @@ const shopifySessionStorage = redisClient ? redisSessionStorage : sqliteSessionS
 
 // Initialize Shopify App
 const shopifyAppMiddleware = shopifyApp({
-  api: shopify,
+  apiKey: process.env.SHOPIFY_API_KEY,
+  apiSecretKey: process.env.SHOPIFY_API_SECRET,
+  scopes: ['read_companies', 'write_companies'],
+  hostName: hostName,
+  apiVersion: '2025-01',
+  isEmbeddedApp: true,
   auth: {
     path: '/auth',
     callbackPath: '/auth/callback',
@@ -328,7 +332,13 @@ const getGraphqlClient = async (req, res) => {
     return null;
   }
 
-  return new shopify.clients.Graphql({ session: sessionData });
+  // Get the Shopify API instance from the app middleware
+  const shopifyApi = res.locals.shopify?.api;
+  if (!shopifyApi) {
+    return null;
+  }
+
+  return new shopifyApi.clients.Graphql({ session: sessionData });
 };
 
 const fetchAllCompanies = async (client) => {
