@@ -2,12 +2,12 @@
   "name": "shopify-staff-assignment-app",
   "version": "1.0.0",
   "description": "Shopify app for managing staff assignments to company locations",
-  "main": "server.js",
+  "main": "api/index.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
+    "start": "node api/index.js",
+    "dev": "nodemon api/index.js",
     "build": "npm install",
-    "deploy": "shopify app deploy"
+    "deploy": "vercel --prod"
   },
   "dependencies": {
     "@shopify/shopify-api": "^8.1.1",
@@ -32,5 +32,8 @@
     "companies"
   ],
   "author": "Country Life Foods",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }

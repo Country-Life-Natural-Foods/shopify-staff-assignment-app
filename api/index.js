@@ -24,7 +24,10 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'your-session-secret',
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: true, maxAge: 24 * 60 * 60 * 1000 } // 24 hours
+  cookie: { 
+    secure: process.env.NODE_ENV === 'production', // Only secure in production
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
 }));
 
 // Initialize Shopify API
@@ -49,18 +52,21 @@ const shopifyAppMiddleware = shopifyApp({
   },
   sessionStorage: {
     storeSession: async (session) => {
-      // For Vercel, we'll use a simple in-memory store
-      // In production, consider using a database
+      // Simple in-memory store for Vercel
+      // Note: This will reset on each deployment
+      if (!global.sessions) global.sessions = new Map();
+      global.sessions.set(session.id, session);
       return true;
     },
     loadSession: async (id) => {
-      // For Vercel, we'll use a simple in-memory store
-      // In production, consider using a database
-      return null;
+      // Load session from in-memory store
+      if (!global.sessions) global.sessions = new Map();
+      return global.sessions.get(id) || null;
     },
     deleteSession: async (id) => {
-      // For Vercel, we'll use a simple in-memory store
-      // In production, consider using a database
+      // Delete session from in-memory store
+      if (!global.sessions) global.sessions = new Map();
+      global.sessions.delete(id);
       return true;
     },
   },
