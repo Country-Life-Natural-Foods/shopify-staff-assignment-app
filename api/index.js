@@ -50,7 +50,6 @@ const shopifyAppMiddleware = shopifyApp({
   sessionStorage: {
     storeSession: async (session) => {
       // For Vercel, we'll use a simple in-memory store
-      // In production, consider using a database
       if (!global.sessions) {
         global.sessions = new Map();
       }
@@ -58,16 +57,12 @@ const shopifyAppMiddleware = shopifyApp({
       return true;
     },
     loadSession: async (id) => {
-      // For Vercel, we'll use a simple in-memory store
-      // In production, consider using a database
       if (!global.sessions) {
         global.sessions = new Map();
       }
       return global.sessions.get(id) || null;
     },
     deleteSession: async (id) => {
-      // For Vercel, we'll use a simple in-memory store
-      // In production, consider using a database
       if (!global.sessions) {
         global.sessions = new Map();
       }
@@ -80,7 +75,7 @@ const shopifyAppMiddleware = shopifyApp({
 app.use(shopifyAppMiddleware);
 
 // Serve static files
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, '../public')));
 
 // Routes
 app.get('/', async (req, res) => {
@@ -89,7 +84,7 @@ app.get('/', async (req, res) => {
       return res.redirect('/auth');
     }
 
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    res.sendFile(path.join(__dirname, '../public', 'index.html'));
   } catch (error) {
     console.error('Error loading app:', error);
     res.status(500).send('Internal server error');
