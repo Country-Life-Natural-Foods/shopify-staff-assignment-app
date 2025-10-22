@@ -1,15 +1,21 @@
-{
-  "name": "Staff Assignment Manager",
-  "client_id": "e33dee3eb5ba764d24d3064d6a070c11",
-  "application_url": "https://shopify-staff-assignment-evas1antm.vercel.app",
-  "embedded": true,
-  "access_scopes": {
-    "scopes": "read_companies,write_companies"
-  },
-  "webhooks": {
-    "api_version": "2025-01"
-  },
-  "pos": {
-    "embedded": false
-  }
-}
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+name = "Staff Assignment Manager"
+client_id = "e33dee3eb5ba764d24d3064d6a070c11"
+application_url = "https://shopify-staff-assignment-evas1antm.vercel.app"
+embedded = true
+
+[auth]
+redirect_urls = [
+  "https://shopify-staff-assignment-evas1antm.vercel.app/auth/callback",
+  "https://shopify-staff-assignment-evas1antm.vercel.app/auth/shopify/callback"
+]
+
+[access_scopes]
+scopes = "read_companies,write_companies"
+
+[webhooks]
+api_version = "2025-01"
+
+[pos]
+embedded = false
