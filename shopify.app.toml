@@ -1,7 +1,7 @@
 {
   "name": "Staff Assignment Manager",
   "client_id": "e33dee3eb5ba764d24d3064d6a070c11",
-  "application_url": "https://shopify-staff-assignment-evas1antm.vercel.app",
+  "application_url": "https://shopify-staff-assignment-app-main.vercel.app",
   "embedded": true,
   "access_scopes": {
     "scopes": "read_companies,write_companies"

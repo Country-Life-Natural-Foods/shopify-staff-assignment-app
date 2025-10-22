@@ -51,16 +51,27 @@ const shopifyAppMiddleware = shopifyApp({
     storeSession: async (session) => {
       // For Vercel, we'll use a simple in-memory store
       // In production, consider using a database
+      if (!global.sessions) {
+        global.sessions = new Map();
+      }
+      global.sessions.set(session.id, session);
       return true;
     },
     loadSession: async (id) => {
       // For Vercel, we'll use a simple in-memory store
       // In production, consider using a database
-      return null;
+      if (!global.sessions) {
+        global.sessions = new Map();
+      }
+      return global.sessions.get(id) || null;
     },
     deleteSession: async (id) => {
       // For Vercel, we'll use a simple in-memory store
       // In production, consider using a database
+      if (!global.sessions) {
+        global.sessions = new Map();
+      }
+      global.sessions.delete(id);
       return true;
     },
   },
@@ -107,7 +118,12 @@ app.get('/api/companies', async (req, res) => {
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    const client = new shopify.clients.Graphql({ session: req.session });
+    const session = await shopify.config.sessionStorage.loadSession(req.session.shop);
+    if (!session) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const client = new shopify.clients.Graphql({ session });
     
     const query = `
       query getCompanies($first: Int!, $after: String) {
@@ -177,7 +193,12 @@ app.get('/api/staff', async (req, res) => {
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    const client = new shopify.clients.Graphql({ session: req.session });
+    const session = await shopify.config.sessionStorage.loadSession(req.session.shop);
+    if (!session) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const client = new shopify.clients.Graphql({ session });
     
     const query = `
       query getCompaniesWithStaff($first: Int!, $after: String) {
@@ -279,7 +300,12 @@ app.post('/api/assign', async (req, res) => {
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    const client = new shopify.clients.Graphql({ session: req.session });
+    const session = await shopify.config.sessionStorage.loadSession(req.session.shop);
+    if (!session) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const client = new shopify.clients.Graphql({ session });
     
     const mutation = `
       mutation companyLocationAssignStaffMembers($companyLocationId: ID!, $staffMemberIds: [ID!]!) {
@@ -337,7 +363,12 @@ app.delete('/api/assign', async (req, res) => {
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    const client = new shopify.clients.Graphql({ session: req.session });
+    const session = await shopify.config.sessionStorage.loadSession(req.session.shop);
+    if (!session) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const client = new shopify.clients.Graphql({ session });
     
     const mutation = `
       mutation companyLocationRemoveStaffMembers($companyLocationStaffMemberAssignmentIds: [ID!]!) {
