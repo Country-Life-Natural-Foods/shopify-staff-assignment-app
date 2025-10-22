@@ -756,9 +756,14 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Shopify Staff Assignment App running on port ${PORT}`);
-  console.log(`📱 App URL: ${process.env.SHOPIFY_APP_URL || `http://localhost:${PORT}`}`);
-  console.log(`🔗 Install app in your Shopify store to get started`);
-});
+// Start server (only for local development)
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`🚀 Shopify Staff Assignment App running on port ${PORT}`);
+    console.log(`📱 App URL: ${process.env.SHOPIFY_APP_URL || `http://localhost:${PORT}`}`);
+    console.log(`🔗 Install app in your Shopify store to get started`);
+  });
+}
+
+// Export for Vercel
+module.exports = app;
