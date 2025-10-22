@@ -236,12 +236,12 @@ const redisSessionStorage = {
 
 const shopifySessionStorage = redisClient ? redisSessionStorage : sqliteSessionStorage;
 
-// Configure Shopify API
+// Configure Shopify API - simplified for deployment
 const shopify = shopifyApi({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET,
   scopes: ['read_companies', 'write_companies'],
-  hostName: 'localhost:3000',
+  hostName: process.env.SHOPIFY_APP_URL ? new URL(process.env.SHOPIFY_APP_URL).host : 'localhost:3000',
   apiVersion: '2025-01',
   isEmbeddedApp: true,
 });
