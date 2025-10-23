@@ -1,13 +1,13 @@
 {
   "functions": {
-    "api/shopify-test.js": {
+    "api/index.js": {
       "maxDuration": 30
     }
   },
   "rewrites": [
     {
       "source": "/(.*)",
-      "destination": "/api/shopify-test.js"
+      "destination": "/api/index.js"
     }
   ]
 }

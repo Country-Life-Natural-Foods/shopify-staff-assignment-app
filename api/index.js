@@ -13,6 +13,7 @@ let sqlite3, connectSqlite3;
 try {
   sqlite3 = require('sqlite3').verbose();
   connectSqlite3 = require('connect-sqlite3');
+  console.log('SQLite3 available for local development');
 } catch (error) {
   console.log('SQLite3 not available in serverless environment, using in-memory sessions');
 }
@@ -115,23 +116,9 @@ const ensureRedisConnection = async () => {
   return redisClient;
 };
 
-let sessionStore;
-if (redisClient) {
-  const RedisStore = connectRedis(session);
-  sessionStore = new RedisStore({
-    client: redisClient,
-    prefix: process.env.REDIS_SESSION_PREFIX || 'sess:',
-  });
-} else if (SQLiteStore) {
-  sessionStore = new SQLiteStore({
-    db: 'sessions.sqlite',
-    dir: process.cwd(),
-  });
-} else {
-  // Fallback to in-memory session store for serverless environments
-  console.log('Using in-memory session store');
-  sessionStore = undefined; // Express-session will use MemoryStore by default
-}
+// Use in-memory session store for serverless environments
+let sessionStore = undefined; // Express-session will use MemoryStore by default
+console.log('Using in-memory session store for serverless environment');
 
 app.use(session({
   store: sessionStore,
@@ -313,7 +300,9 @@ const redisSessionStorage = {
   },
 };
 
-const shopifySessionStorage = redisClient ? redisSessionStorage : (sqlite3 ? sqliteSessionStorage : memorySessionStorage);
+// Use in-memory session storage for serverless environments
+const shopifySessionStorage = memorySessionStorage;
+console.log('Using in-memory Shopify session storage');
 
 // Configure Shopify API properly
 const shopify = shopifyApi({
