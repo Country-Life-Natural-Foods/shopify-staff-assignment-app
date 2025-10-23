@@ -19,7 +19,7 @@ require('@shopify/shopify-api/adapters/node');
 // Set required environment variables for Shopify API
 process.env.SHOPIFY_HOSTNAME = process.env.SHOPIFY_HOSTNAME || 'localhost';
 process.env.SHOPIFY_HOST = process.env.SHOPIFY_HOSTNAME || 'localhost';
-process.env.SHOPIFY_API_VERSION = '2024-07';
+process.env.SHOPIFY_API_VERSION = '2026-01';
 
 // Set the hostName environment variable that shopifyApp expects
 process.env.SHOPIFY_HOST_NAME = process.env.SHOPIFY_HOSTNAME || 'localhost';
@@ -258,7 +258,7 @@ const shopify = shopifyApi({
   apiSecretKey: process.env.SHOPIFY_API_SECRET,
   scopes: ['read_companies', 'write_companies'],
   hostName: process.env.SHOPIFY_HOSTNAME || 'localhost',
-  apiVersion: ApiVersion.July24,
+  apiVersion: ApiVersion.January26,
   isEmbeddedApp: true,
 });
 
@@ -272,7 +272,7 @@ const shopifyAppMiddleware = shopifyApp({
   apiSecretKey: process.env.SHOPIFY_API_SECRET,
   scopes: ['read_companies', 'write_companies'],
   hostName: process.env.SHOPIFY_HOSTNAME || 'localhost',
-  apiVersion: ApiVersion.July24,
+  apiVersion: ApiVersion.January26,
   isEmbeddedApp: true,
   auth: {
     path: '/auth',
@@ -345,13 +345,52 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Debug endpoint for troubleshooting
+app.get('/debug', async (req, res) => {
+  try {
+    const sessionData = await loadActiveSession(req, res);
+    res.json({
+      hasSession: !!sessionData,
+      sessionShop: sessionData?.shop,
+      sessionId: sessionData?.id,
+      sessionExpires: sessionData?.expires,
+      reqSession: {
+        shop: req.session?.shop,
+        shopSessionId: req.session?.shopSessionId,
+      },
+      headers: {
+        authorization: req.headers.authorization,
+        cookie: req.headers.cookie ? 'present' : 'missing',
+      },
+      env: {
+        apiVersion: process.env.SHOPIFY_API_VERSION,
+        hostname: process.env.SHOPIFY_HOSTNAME,
+        appUrl: process.env.SHOPIFY_APP_URL,
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Debug endpoint error',
+      details: error.message,
+      stack: error.stack
+    });
+  }
+});
+
 const getGraphqlClient = async (req, res) => {
-  const sessionData = await loadActiveSession(req, res);
-  if (!sessionData) {
+  try {
+    const sessionData = await loadActiveSession(req, res);
+    if (!sessionData) {
+      console.log('No active session found');
+      return null;
+    }
+
+    console.log('Creating GraphQL client for session:', sessionData.shop);
+    return new shopify.clients.Graphql({ session: sessionData });
+  } catch (error) {
+    console.error('Error creating GraphQL client:', error);
     return null;
   }
-
-  return new shopify.clients.Graphql({ session: sessionData });
 };
 
 const fetchAllCompanies = async (client) => {
@@ -458,17 +497,35 @@ const fetchAllCompanies = async (client) => {
   const all = [];
 
   while (hasNextPage) {
-    const response = await client.query({
-      data: {
-        query,
-        variables: { first: 50, after: cursor },
-      },
-    });
+    try {
+      console.log('Executing GraphQL query with cursor:', cursor);
+      const response = await client.query({
+        data: {
+          query,
+          variables: { first: 50, after: cursor },
+        },
+      });
 
-    const { edges, pageInfo } = response.body.data.companies;
-    all.push(...edges.map((edge) => edge.node));
-    hasNextPage = pageInfo.hasNextPage;
-    cursor = pageInfo.endCursor;
+      console.log('GraphQL response received:', JSON.stringify(response.body, null, 2));
+      
+      if (response.body.errors) {
+        console.error('GraphQL errors:', response.body.errors);
+        throw new Error(`GraphQL errors: ${JSON.stringify(response.body.errors)}`);
+      }
+
+      if (!response.body.data || !response.body.data.companies) {
+        console.error('No companies data in response:', response.body);
+        throw new Error('No companies data in GraphQL response');
+      }
+
+      const { edges, pageInfo } = response.body.data.companies;
+      all.push(...edges.map((edge) => edge.node));
+      hasNextPage = pageInfo.hasNextPage;
+      cursor = pageInfo.endCursor;
+    } catch (error) {
+      console.error('Error in GraphQL query execution:', error);
+      throw error;
+    }
   }
 
   return all;
@@ -489,9 +546,12 @@ app.get('/api/companies', async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching companies:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ 
       error: 'Failed to fetch companies',
-      details: error.message 
+      details: error.message,
+      type: error.constructor.name,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
