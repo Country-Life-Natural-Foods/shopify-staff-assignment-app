@@ -7,8 +7,15 @@ const helmet = require('helmet');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const sqlite3 = require('sqlite3').verbose();
-const connectSqlite3 = require('connect-sqlite3');
+// SQLite3 is not compatible with Vercel serverless functions
+// Use in-memory session storage for production
+let sqlite3, connectSqlite3;
+try {
+  sqlite3 = require('sqlite3').verbose();
+  connectSqlite3 = require('connect-sqlite3');
+} catch (error) {
+  console.log('SQLite3 not available in serverless environment, using in-memory sessions');
+}
 const connectRedis = require('connect-redis');
 const { createClient } = require('redis');
 
@@ -57,7 +64,10 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Session storage setup
-const SQLiteStore = connectSqlite3(session);
+let SQLiteStore = null;
+if (connectSqlite3) {
+  SQLiteStore = connectSqlite3(session);
+}
 let redisClient = null;
 let redisConnectPromise = null;
 
@@ -112,11 +122,15 @@ if (redisClient) {
     client: redisClient,
     prefix: process.env.REDIS_SESSION_PREFIX || 'sess:',
   });
-} else {
+} else if (SQLiteStore) {
   sessionStore = new SQLiteStore({
     db: 'sessions.sqlite',
     dir: process.cwd(),
   });
+} else {
+  // Fallback to in-memory session store for serverless environments
+  console.log('Using in-memory session store');
+  sessionStore = undefined; // Express-session will use MemoryStore by default
 }
 
 app.use(session({
@@ -155,9 +169,51 @@ const getShopifySessionsDb = () => {
   return shopifySessionsDb;
 };
 
+// In-memory session storage for serverless environments
+const memorySessionStorage = {
+  sessions: new Map(),
+  storeSession: (sessionData) => new Promise((resolve) => {
+    const payload = JSON.stringify(sessionData.toPropertyArray());
+    const expires = sessionData.expires ? sessionData.expires.getTime() : null;
+    memorySessionStorage.sessions.set(sessionData.id, { payload, expires });
+    resolve(true);
+  }),
+  loadSession: (id) => new Promise((resolve) => {
+    if (!id) {
+      return resolve(null);
+    }
+
+    const sessionData = memorySessionStorage.sessions.get(id);
+    if (!sessionData) {
+      return resolve(null);
+    }
+
+    // Check if session has expired
+    if (sessionData.expires && sessionData.expires < Date.now()) {
+      memorySessionStorage.sessions.delete(id);
+      return resolve(null);
+    }
+
+    try {
+      const entries = JSON.parse(sessionData.payload);
+      resolve(Session.fromPropertyArray(entries));
+    } catch (parseError) {
+      console.error('Error parsing session data:', parseError);
+      resolve(null);
+    }
+  }),
+  deleteSession: (id) => new Promise((resolve) => {
+    memorySessionStorage.sessions.delete(id);
+    resolve(true);
+  }),
+};
+
 const sqliteSessionStorage = {
   storeSession: (sessionData) => new Promise((resolve, reject) => {
     const db = getShopifySessionsDb();
+    if (!db) {
+      return memorySessionStorage.storeSession(sessionData);
+    }
     const payload = JSON.stringify(sessionData.toPropertyArray());
     const expires = sessionData.expires ? sessionData.expires.getTime() : null;
     db.run(
@@ -172,6 +228,10 @@ const sqliteSessionStorage = {
     }
 
     const db = getShopifySessionsDb();
+    if (!db) {
+      return memorySessionStorage.loadSession(id);
+    }
+
     db.get(
       'SELECT session FROM shopify_sessions WHERE id = ?',
       [id],
@@ -194,6 +254,9 @@ const sqliteSessionStorage = {
   }),
   deleteSession: (id) => new Promise((resolve, reject) => {
     const db = getShopifySessionsDb();
+    if (!db) {
+      return memorySessionStorage.deleteSession(id);
+    }
     db.run(
       'DELETE FROM shopify_sessions WHERE id = ?',
       [id],
@@ -250,7 +313,7 @@ const redisSessionStorage = {
   },
 };
 
-const shopifySessionStorage = redisClient ? redisSessionStorage : sqliteSessionStorage;
+const shopifySessionStorage = redisClient ? redisSessionStorage : (sqlite3 ? sqliteSessionStorage : memorySessionStorage);
 
 // Configure Shopify API properly
 const shopify = shopifyApi({
