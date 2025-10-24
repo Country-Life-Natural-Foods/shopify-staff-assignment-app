@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Staff Assignment Manager - Simple</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f6f6f7;
+            color: #202223;
+            line-height: 1.5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            color: #008060;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            color: #6d7175;
+        }
+
+        .tabs {
+            display: flex;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            overflow: hidden;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 15px 20px;
+            background: white;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            color: #6d7175;
+            transition: all 0.2s;
+        }
+
+        .tab:hover {
+            background: #f6f6f7;
+        }
+
+        .tab.active {
+            background: #008060;
+            color: white;
+        }
+
+        .content {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .tab-content h2 {
+            font-size: 1.8rem;
+            margin-bottom: 20px;
+            color: #202223;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6d7175;
+            font-size: 1.1rem;
+        }
+
+        .error {
+            background: #fee;
+            color: #d72c0d;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            border-left: 4px solid #d72c0d;
+        }
+
+        .success {
+            background: #efe;
+            color: #008060;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            border-left: 4px solid #008060;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: #f6f6f7;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #008060;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: #6d7175;
+            font-weight: 500;
+        }
+
+        .data-list {
+            display: grid;
+            gap: 15px;
+        }
+
+        .data-item {
+            background: #f6f6f7;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #008060;
+        }
+
+        .data-item h3 {
+            margin-bottom: 10px;
+            color: #202223;
+        }
+
+        .data-item p {
+            color: #6d7175;
+            margin-bottom: 5px;
+        }
+
+        .data-item strong {
+            color: #202223;
+        }
+
+        .btn {
+            background: #008060;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: #006b4e;
+        }
+
+        .btn:disabled {
+            background: #6d7175;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏢 Staff Assignment Manager</h1>
+            <p>Simple version - Display staff and companies</p>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('overview')">Overview</button>
+            <button class="tab" onclick="showTab('companies')">Companies</button>
+            <button class="tab" onclick="showTab('staff')">Staff</button>
+        </div>
+
+        <div class="content">
+            <!-- Overview Tab -->
+            <div id="overview" class="tab-content active">
+                <h2>📊 Overview</h2>
+                <div class="stats">
+                    <div class="stat-card">
+                        <div class="stat-number" id="companies-count">-</div>
+                        <div class="stat-label">Companies</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="staff-count">-</div>
+                        <div class="stat-label">Staff Members</div>
+                    </div>
+                </div>
+                <div id="overview-content">
+                    <div class="loading">Loading overview data...</div>
+                </div>
+            </div>
+
+            <!-- Companies Tab -->
+            <div id="companies" class="tab-content">
+                <h2>🏢 Companies</h2>
+                <div id="companies-content">
+                    <div class="loading">Loading companies...</div>
+                </div>
+            </div>
+
+            <!-- Staff Tab -->
+            <div id="staff" class="tab-content">
+                <h2>👥 Staff Members</h2>
+                <div id="staff-content">
+                    <div class="loading">Loading staff...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let companies = [];
+        let staff = [];
+
+        // Tab switching
+        function showTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab content
+            document.getElementById(tabName).classList.add('active');
+            
+            // Add active class to clicked tab
+            event.target.classList.add('active');
+            
+            // Load data for the selected tab
+            if (tabName === 'companies' && companies.length === 0) {
+                loadCompanies();
+            } else if (tabName === 'staff' && staff.length === 0) {
+                loadStaff();
+            }
+        }
+
+        // Load companies
+        async function loadCompanies() {
+            try {
+                console.log('Loading companies...');
+                const response = await fetch('/api/companies');
+                const result = await response.json();
+                
+                console.log('Companies response:', result);
+                
+                if (result.success) {
+                    companies = result.data;
+                    displayCompanies();
+                } else {
+                    showError('Error loading companies: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Error loading companies:', error);
+                showError('Error loading companies: ' + error.message);
+            }
+        }
+
+        // Display companies
+        function displayCompanies() {
+            const content = document.getElementById('companies-content');
+            
+            if (companies.length === 0) {
+                content.innerHTML = '<div class="error">No companies found</div>';
+                return;
+            }
+
+            let html = `<div class="data-list">`;
+            companies.forEach(company => {
+                html += `
+                    <div class="data-item">
+                        <h3>${company.name || 'Unnamed Company'}</h3>
+                        <p><strong>ID:</strong> ${company.id}</p>
+                        <p><strong>External ID:</strong> ${company.externalId || 'N/A'}</p>
+                        <p><strong>Locations:</strong> ${company.locations ? company.locations.length : 0}</p>
+                        ${company.locations && company.locations.length > 0 ? `
+                            <div style="margin-top: 10px;">
+                                <strong>Locations:</strong>
+                                ${company.locations.map(location => `
+                                    <div style="margin-left: 20px; margin-top: 5px;">
+                                        <strong>${location.name || 'Unnamed Location'}</strong><br>
+                                        ${location.address ? `
+                                            ${location.address.address1 || ''}<br>
+                                            ${location.address.city || ''}, ${location.address.province || ''} ${location.address.zip || ''}<br>
+                                            ${location.address.country || ''}
+                                        ` : 'No address'}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            });
+            html += `</div>`;
+            
+            content.innerHTML = html;
+        }
+
+        // Load staff
+        async function loadStaff() {
+            try {
+                console.log('Loading staff...');
+                const response = await fetch('/api/staff');
+                const result = await response.json();
+                
+                console.log('Staff response:', result);
+                
+                if (result.success) {
+                    staff = result.data;
+                    displayStaff();
+                } else {
+                    showError('Error loading staff: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Error loading staff:', error);
+                showError('Error loading staff: ' + error.message);
+            }
+        }
+
+        // Display staff
+        function displayStaff() {
+            const content = document.getElementById('staff-content');
+            
+            if (staff.length === 0) {
+                content.innerHTML = '<div class="error">No staff found</div>';
+                return;
+            }
+
+            let html = `<div class="data-list">`;
+            staff.forEach(member => {
+                html += `
+                    <div class="data-item">
+                        <h3>${member.firstName || ''} ${member.lastName || ''}</h3>
+                        <p><strong>ID:</strong> ${member.id}</p>
+                        <p><strong>Email:</strong> ${member.email || 'N/A'}</p>
+                        <p><strong>Locale:</strong> ${member.locale || 'N/A'}</p>
+                        <p><strong>Permissions:</strong> ${member.permissions ? member.permissions.join(', ') : 'N/A'}</p>
+                    </div>
+                `;
+            });
+            html += `</div>`;
+            
+            content.innerHTML = html;
+        }
+
+        // Load overview
+        async function loadOverview() {
+            try {
+                console.log('Loading overview...');
+                await Promise.all([loadCompanies(), loadStaff()]);
+                updateStats();
+                
+                const content = document.getElementById('overview-content');
+                content.innerHTML = `
+                    <div class="success">
+                        <strong>✅ Data loaded successfully!</strong><br>
+                        Found ${companies.length} companies and ${staff.length} staff members.
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error loading overview:', error);
+                showError('Error loading overview: ' + error.message);
+            }
+        }
+
+        // Update statistics
+        function updateStats() {
+            document.getElementById('companies-count').textContent = companies.length;
+            document.getElementById('staff-count').textContent = staff.length;
+        }
+
+        // Show error message
+        function showError(message) {
+            const content = document.getElementById('overview-content');
+            content.innerHTML = `<div class="error">${message}</div>`;
+        }
+
+        // Load initial data
+        document.addEventListener('DOMContentLoaded', function() {
+            loadOverview();
+        });
+    </script>
+</body>
+</html>
