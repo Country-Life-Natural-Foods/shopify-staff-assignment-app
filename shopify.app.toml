@@ -2,13 +2,13 @@
 
 name = "Staff Assignment Manager"
 client_id = "e33dee3eb5ba764d24d3064d6a070c11"
-application_url = "https://shopify-staff-assignment-75xtv49xm.vercel.app"
+application_url = "https://shopify-staff-assignment-r97kfs7mb.vercel.app"
 embedded = true
 
 [auth]
 redirect_urls = [
-  "https://shopify-staff-assignment-75xtv49xm.vercel.app/auth/callback",
-  "https://shopify-staff-assignment-75xtv49xm.vercel.app/auth/shopify/callback"
+  "https://shopify-staff-assignment-r97kfs7mb.vercel.app/auth/callback",
+  "https://shopify-staff-assignment-r97kfs7mb.vercel.app/auth/shopify/callback"
 ]
 
 [access_scopes]
