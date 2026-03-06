@@ -14,14 +14,31 @@ const { shopifyApp } = require('@shopify/shopify-app-express');
 
 const app = express();
 
-// Basic middleware
-app.use(helmet());
+// Basic middleware - configure Helmet to allow Shopify admin iframe embedding
+// Helmet's default X-Frame-Options blocks embedding; we set frame-ancestors instead
+app.use(helmet({
+  contentSecurityPolicy: false, // We set frame-ancestors manually for Shopify
+  frameGuard: false,            // Disable X-Frame-Options (incompatible with embedded apps)
+}));
 app.use(cors());
+
+// Shopify embedded app: set frame-ancestors so admin.shopify.com can embed our app
+// Required for "refused to connect" fix - see https://shopify.dev/docs/apps/build/security/set-up-iframe-protection
+app.use((req, res, next) => {
+  const shop = req.query.shop;
+  const frameAncestors = shop
+    ? `https://${shop} https://admin.shopify.com`
+    : 'https://admin.shopify.com https://*.myshopify.com';
+  res.setHeader('Content-Security-Policy', `frame-ancestors ${frameAncestors};`);
+  next();
+});
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Set required environment variables for Shopify API
-process.env.SHOPIFY_HOSTNAME = process.env.SHOPIFY_HOSTNAME || 'localhost';
+// Derive hostname from SHOPIFY_APP_URL for Vercel (e.g. shopify-staff-assignment-64n1e2aao.vercel.app)
+const appHost = process.env.SHOPIFY_APP_URL?.replace(/^https?:\/\//, '').replace(/\/$/, '');
+process.env.SHOPIFY_HOSTNAME = process.env.SHOPIFY_HOSTNAME || appHost || 'localhost';
 process.env.SHOPIFY_HOST = process.env.SHOPIFY_HOSTNAME || 'localhost';
 process.env.SHOPIFY_API_VERSION = '2026-01';
 
