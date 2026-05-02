@@ -12,7 +12,7 @@ redirect_urls = [
 ]
 
 [access_scopes]
-scopes = "read_companies,write_companies"
+scopes = "read_companies,write_companies,read_users,read_orders,read_customers,write_customers"
 
 [webhooks]
 api_version = "2026-01"
