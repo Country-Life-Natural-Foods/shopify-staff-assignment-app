@@ -1,15 +1,15 @@
 const express = require('express');
 const session = require('express-session');
+const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
-const fs = require('fs');
 
 // Load environment variables
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 require('@shopify/shopify-api/adapters/node');
 
-const { shopifyApi, Session, ApiVersion } = require('@shopify/shopify-api');
+const { Session, LATEST_API_VERSION } = require('@shopify/shopify-api');
 const { shopifyApp } = require('@shopify/shopify-app-express');
 
 const app = express();
@@ -25,6 +25,7 @@ app.use(helmet({
 }));
 
 app.use(cors());
+app.use(cookieParser());
 
 // Shopify embedded app: set frame-ancestors
 app.use((req, res, next) => {
@@ -39,35 +40,57 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Simple in-memory session storage
+// In-memory session storage (implements methods required by @shopify/shopify-app-express webhooks)
 const memorySessionStorage = {
   sessions: new Map(),
-  storeSession: (sessionData) => new Promise((resolve) => {
-    const payload = JSON.stringify(sessionData.toPropertyArray());
-    const expires = sessionData.expires ? sessionData.expires.getTime() : null;
-    memorySessionStorage.sessions.set(sessionData.id, { payload, expires });
-    resolve(true);
-  }),
-  loadSession: (id) => new Promise((resolve) => {
-    if (!id) return resolve(null);
-    const sessionData = memorySessionStorage.sessions.get(id);
-    if (!sessionData) return resolve(null);
-    if (sessionData.expires && sessionData.expires < Date.now()) {
-      memorySessionStorage.sessions.delete(id);
-      return resolve(null);
+  storeSession(sessionData) {
+    return new Promise((resolve) => {
+      const payload = JSON.stringify(sessionData.toPropertyArray());
+      const expires = sessionData.expires ? sessionData.expires.getTime() : null;
+      this.sessions.set(sessionData.id, { payload, expires });
+      resolve(true);
+    });
+  },
+  loadSession(id) {
+    return new Promise((resolve) => {
+      if (!id) return resolve(null);
+      const sessionData = this.sessions.get(id);
+      if (!sessionData) return resolve(null);
+      if (sessionData.expires && sessionData.expires < Date.now()) {
+        this.sessions.delete(id);
+        return resolve(null);
+      }
+      try {
+        const entries = JSON.parse(sessionData.payload);
+        resolve(Session.fromPropertyArray(entries));
+      } catch (parseError) {
+        console.error('Error parsing session data:', parseError);
+        resolve(null);
+      }
+    });
+  },
+  deleteSession(id) {
+    return new Promise((resolve) => {
+      this.sessions.delete(id);
+      resolve(true);
+    });
+  },
+  async findSessionsByShop(shopDomain) {
+    const needle = String(shopDomain || '')
+      .toLowerCase()
+      .replace(/^https?:\/\//, '');
+    const matches = [];
+    for (const id of this.sessions.keys()) {
+      const s = await this.loadSession(id);
+      if (s && String(s.shop || '').toLowerCase() === needle) {
+        matches.push(s);
+      }
     }
-    try {
-      const entries = JSON.parse(sessionData.payload);
-      resolve(Session.fromPropertyArray(entries));
-    } catch (parseError) {
-      console.error('Error parsing session data:', parseError);
-      resolve(null);
-    }
-  }),
-  deleteSession: (id) => new Promise((resolve) => {
-    memorySessionStorage.sessions.delete(id);
-    resolve(true);
-  }),
+    return matches;
+  },
+  async deleteSessions(ids) {
+    await Promise.all(ids.map((id) => this.deleteSession(id)));
+  },
 };
 
 // Express session setup
@@ -83,21 +106,28 @@ app.use(session({
   },
 }));
 
-const hostName = process.env.SHOPIFY_HOSTNAME || process.env.SHOPIFY_APP_URL?.replace(/^https?:\/\//, '') || 'localhost';
+const hostName =
+  process.env.SHOPIFY_HOSTNAME ||
+  process.env.HOST?.replace(/^https?:\/\//, '') ||
+  process.env.SHOPIFY_APP_URL?.replace(/^https?:\/\//, '') ||
+  'localhost';
 
-// Configuration for Shopify API
-const shopify = shopifyApi({
-  apiKey: process.env.SHOPIFY_API_KEY || 'dummy_key',
-  apiSecretKey: process.env.SHOPIFY_API_SECRET || 'dummy_secret',
-  scopes: ['read_companies', 'write_companies', 'read_customers', 'write_customers', 'read_users', 'read_orders'],
-  hostName: hostName,
-  apiVersion: ApiVersion.January26,
-  isEmbeddedApp: true,
-});
+const hostScheme =
+  process.env.HOST?.startsWith('https') ? 'https'
+    : process.env.NODE_ENV === 'production' ? 'https'
+      : 'http';
 
-// Initialize Shopify App
+// Single Shopify initialization — shopifyApp() expects an api config object, not a shopifyApi() instance
 const shopifyAppInstance = shopifyApp({
-  api: shopify,
+  api: {
+    apiKey: process.env.SHOPIFY_API_KEY || 'dummy_key',
+    apiSecretKey: process.env.SHOPIFY_API_SECRET || 'dummy_secret',
+    scopes: ['read_companies', 'write_companies', 'read_customers', 'write_customers', 'read_users', 'read_orders'],
+    hostName,
+    hostScheme,
+    apiVersion: LATEST_API_VERSION,
+    isEmbeddedApp: true,
+  },
   auth: {
     path: '/auth',
     callbackPath: '/auth/callback',
@@ -113,7 +143,18 @@ const shopifyAppInstance = shopifyApp({
   sessionStorage: memorySessionStorage,
 });
 
-app.use(shopifyAppInstance);
+const shopify = shopifyAppInstance.api;
+
+app.get(shopifyAppInstance.config.auth.path, shopifyAppInstance.auth.begin());
+app.get(
+  shopifyAppInstance.config.auth.callbackPath,
+  shopifyAppInstance.auth.callback(),
+  shopifyAppInstance.redirectToShopifyOrAppRoot(),
+);
+app.post(
+  shopifyAppInstance.config.webhooks.path,
+  ...shopifyAppInstance.processWebhooks({ webhookHandlers: {} }),
+);
 
 // Serve static files
 app.use(express.static(publicDir));
@@ -122,7 +163,18 @@ const loadActiveSession = async (req, res) => {
   if (res?.locals?.shopify?.session) {
     return res.locals.shopify.session;
   }
-  const sessionId = req.session?.shopSessionId || req.query.shop;
+  const rawShop = req.query.shop;
+  if (rawShop) {
+    try {
+      const shop = shopify.utils.sanitizeShop(rawShop);
+      const offlineId = shopify.session.getOfflineId(shop);
+      const offlineSession = await memorySessionStorage.loadSession(offlineId);
+      if (offlineSession) return offlineSession;
+    } catch (e) {
+      console.warn('loadActiveSession: offline lookup failed', e.message);
+    }
+  }
+  const sessionId = req.session?.shopSessionId;
   if (!sessionId) return null;
   return memorySessionStorage.loadSession(sessionId);
 };
@@ -154,6 +206,13 @@ const getGraphqlClient = async (req, res) => {
   const sessionData = await loadActiveSession(req, res);
   if (!sessionData) return null;
   return new shopify.clients.Graphql({ session: sessionData });
+};
+
+const throwIfGraphqlErrors = (response, label) => {
+  const errs = response.body?.errors;
+  if (errs?.length) {
+    throw new Error(`${label}: ${errs.map((e) => e.message).join('; ')}`);
+  }
 };
 
 // Fetch real companies with performance data
@@ -215,14 +274,22 @@ const fetchAllCompanies = async (client) => {
     const response = await client.query({
       data: { query, variables: { first: 50, after: cursor } },
     });
-    const { edges, pageInfo } = response.body.data.companies;
+    throwIfGraphqlErrors(response, 'companies');
+    const companiesData = response.body?.data?.companies;
+    if (!companiesData) {
+      throw new Error('companies: empty data');
+    }
+    const { edges, pageInfo } = companiesData;
 
     // For each company, fetch orders to calculate performance
     for (const edge of edges) {
       const company = edge.node;
 
-      // Fetch orders for this company
-      const ordersQuery = `
+      let totalSpend = 0;
+      let orderCount = 0;
+      let lastOrderDate = null;
+      try {
+        const ordersQuery = `
         query getCompanyOrders($query: String!) {
           orders(first: 100, query: $query) {
             edges {
@@ -239,17 +306,21 @@ const fetchAllCompanies = async (client) => {
         }
       `;
 
-      const ordersResponse = await client.query({
-        data: {
-          query: ordersQuery,
-          variables: { query: `company_id:${company.id.split('/').pop()}` }
-        }
-      });
-      
-      const orders = ordersResponse.body.data.orders.edges.map(e => e.node);
-      const totalSpend = orders.reduce((sum, order) => sum + parseFloat(order.totalPriceSet.shopMoney.amount), 0);
-      const orderCount = orders.length;
-      const lastOrderDate = orders.length > 0 ? orders[0].createdAt : null;
+        const ordersResponse = await client.query({
+          data: {
+            query: ordersQuery,
+            variables: { query: `company_id:${company.id.split('/').pop()}` }
+          }
+        });
+        throwIfGraphqlErrors(ordersResponse, 'orders');
+        const orderEdges = ordersResponse.body?.data?.orders?.edges;
+        const orders = orderEdges ? orderEdges.map((e) => e.node) : [];
+        totalSpend = orders.reduce((sum, order) => sum + parseFloat(order.totalPriceSet.shopMoney.amount), 0);
+        orderCount = orders.length;
+        lastOrderDate = orders.length > 0 ? orders[0].createdAt : null;
+      } catch (orderErr) {
+        console.warn('orders for company', company.id, orderErr.message);
+      }
 
       company.performance = {
         totalSpend,
@@ -271,6 +342,7 @@ const fetchAllCompanies = async (client) => {
 app.get('/api/companies', async (req, res) => {
   try {
     const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
     const companies = await fetchAllCompanies(client);
     res.json({ edges: companies.map(c => ({ node: c })) });
   } catch (error) {
@@ -284,8 +356,8 @@ app.get('/api/staff', async (req, res) => {
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
     const query = `
-      query getUsers($first: Int!) {
-        users(first: $first) {
+      query getStaff($first: Int!, $after: String) {
+        staffMembers(first: $first, after: $after) {
           edges {
             node {
               id
@@ -294,11 +366,33 @@ app.get('/api/staff', async (req, res) => {
               email
             }
           }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
       }
     `;
-    const response = await client.query({ data: { query, variables: { first: 50 } } });
-    res.json(response.body.data.users);
+    let allStaff = [];
+    let hasNextPage = true;
+    let cursor = null;
+    while (hasNextPage) {
+      const response = await client.query({
+        data: { query, variables: { first: 50, after: cursor } },
+      });
+      throwIfGraphqlErrors(response, 'staffMembers');
+      const staffData = response.body?.data?.staffMembers;
+      if (!staffData) {
+        throw new Error('staffMembers: empty data');
+      }
+      allStaff = allStaff.concat(staffData.edges.map((edge) => edge.node));
+      hasNextPage = staffData.pageInfo.hasNextPage;
+      cursor = staffData.pageInfo.endCursor;
+    }
+    res.json({
+      edges: allStaff.map((node) => ({ node })),
+      pageInfo: { hasNextPage: false }
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

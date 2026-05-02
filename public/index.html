@@ -162,6 +162,17 @@
         let companies = [];
         let staff = [];
 
+        function apiUrl(path) {
+            const params = new URLSearchParams(window.location.search);
+            const shop = params.get('shop');
+            const host = params.get('host');
+            const q = new URLSearchParams();
+            if (shop) q.set('shop', shop);
+            if (host) q.set('host', host);
+            const qs = q.toString();
+            return qs ? `${path}?${qs}` : path;
+        }
+
         function showTab(name) {
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -172,11 +183,23 @@
 
         async function loadData() {
             try {
-                const [cRes, sRes] = await Promise.all([fetch('/api/companies'), fetch('/api/staff')]);
-                const cData = await cRes.json();
-                const sData = await sRes.json();
-                companies = cData.edges.map(e => e.node);
-                staff = sData.edges ? sData.edges.map(e => e.node) : [];
+                const fetchOpts = { credentials: 'same-origin' };
+                const [cRes, sRes] = await Promise.all([
+                    fetch(apiUrl('/api/companies'), fetchOpts),
+                    fetch(apiUrl('/api/staff'), fetchOpts),
+                ]);
+                const cData = await cRes.json().catch(() => ({}));
+                const sData = await sRes.json().catch(() => ({}));
+                if (!cRes.ok || !sRes.ok) {
+                    const err = cData.error || sData.error || 'Could not load data';
+                    document.getElementById('performance-content').innerHTML =
+                        `<div class="error">${err}. Try reinstalling the app or contact support.</div>`;
+                    document.getElementById('companies-content').innerHTML =
+                        `<div class="error">${err}</div>`;
+                    return;
+                }
+                companies = (cData.edges || []).map(e => e.node);
+                staff = (sData.edges || []).map(e => e.node);
                 renderCompanies();
                 renderPerformance();
                 populateSelects();
@@ -276,7 +299,7 @@
             btn.disabled = true;
             btn.textContent = 'Syncing...';
             try {
-                const res = await fetch('/api/sync-b2b-map', { method: 'POST' });
+                const res = await fetch(apiUrl('/api/sync-b2b-map'), { method: 'POST', credentials: 'same-origin' });
                 const data = await res.json();
                 alert(`Sync Complete! Created: ${data.created}, Updated: ${data.updated}`);
             } catch (e) { alert('Sync failed: ' + e.message); }
@@ -299,14 +322,15 @@
                     country: document.getElementById('addr-country').value,
                 }
             };
-            const res = await fetch('/api/companies', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+            const res = await fetch(apiUrl('/api/companies'), { method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
             if (res.ok) { alert('Company Created!'); loadData(); showTab('companies'); }
         };
 
         document.getElementById('assign-form').onsubmit = async (e) => {
             e.preventDefault();
-            const res = await fetch('/api/assign', {
+            const res = await fetch(apiUrl('/api/assign'), {
                 method: 'POST',
+                credentials: 'same-origin',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     staffId: document.getElementById('staff-select').value,

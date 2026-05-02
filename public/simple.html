@@ -247,6 +247,17 @@
         let companies = [];
         let staff = [];
 
+        function apiUrl(path) {
+            const params = new URLSearchParams(window.location.search);
+            const shop = params.get('shop');
+            const host = params.get('host');
+            const q = new URLSearchParams();
+            if (shop) q.set('shop', shop);
+            if (host) q.set('host', host);
+            const qs = q.toString();
+            return qs ? `${path}?${qs}` : path;
+        }
+
         // Tab switching
         function showTab(tabName) {
             // Hide all tab contents
@@ -277,16 +288,23 @@
         async function loadCompanies() {
             try {
                 console.log('Loading companies...');
-                const response = await fetch('/api/companies');
+                const response = await fetch(apiUrl('/api/companies'), { credentials: 'same-origin' });
                 const result = await response.json();
                 
                 console.log('Companies response:', result);
                 
-                if (result.success) {
+                if (!response.ok) {
+                    showError('Error loading companies: ' + (result.error || response.statusText));
+                    return;
+                }
+                if (result.edges) {
+                    companies = result.edges.map(function (e) { return e.node; });
+                    displayCompanies();
+                } else if (result.success && result.data) {
                     companies = result.data;
                     displayCompanies();
                 } else {
-                    showError('Error loading companies: ' + result.error);
+                    showError('Error loading companies: unexpected response');
                 }
             } catch (error) {
                 console.error('Error loading companies:', error);
@@ -305,25 +323,30 @@
 
             let html = `<div class="data-list">`;
             companies.forEach(company => {
+                const locEdges = company.locations && company.locations.edges ? company.locations.edges : [];
+                const locList = locEdges.map(function (le) {
+                    var location = le.node;
+                    var addr = location.shippingAddress || location.address;
+                    return `
+                                    <div style="margin-left: 20px; margin-top: 5px;">
+                                        <strong>${location.name || 'Unnamed Location'}</strong><br>
+                                        ${addr ? `
+                                            ${addr.address1 || ''}<br>
+                                            ${addr.city || ''}, ${addr.province || ''} ${addr.zip || ''}<br>
+                                            ${addr.country || ''}
+                                        ` : 'No address'}
+                                    </div>`;
+                }).join('');
                 html += `
                     <div class="data-item">
                         <h3>${company.name || 'Unnamed Company'}</h3>
                         <p><strong>ID:</strong> ${company.id}</p>
                         <p><strong>External ID:</strong> ${company.externalId || 'N/A'}</p>
-                        <p><strong>Locations:</strong> ${company.locations ? company.locations.length : 0}</p>
-                        ${company.locations && company.locations.length > 0 ? `
+                        <p><strong>Locations:</strong> ${locEdges.length}</p>
+                        ${locEdges.length > 0 ? `
                             <div style="margin-top: 10px;">
                                 <strong>Locations:</strong>
-                                ${company.locations.map(location => `
-                                    <div style="margin-left: 20px; margin-top: 5px;">
-                                        <strong>${location.name || 'Unnamed Location'}</strong><br>
-                                        ${location.address ? `
-                                            ${location.address.address1 || ''}<br>
-                                            ${location.address.city || ''}, ${location.address.province || ''} ${location.address.zip || ''}<br>
-                                            ${location.address.country || ''}
-                                        ` : 'No address'}
-                                    </div>
-                                `).join('')}
+                                ${locList}
                             </div>
                         ` : ''}
                     </div>
@@ -338,16 +361,23 @@
         async function loadStaff() {
             try {
                 console.log('Loading staff...');
-                const response = await fetch('/api/staff');
+                const response = await fetch(apiUrl('/api/staff'), { credentials: 'same-origin' });
                 const result = await response.json();
                 
                 console.log('Staff response:', result);
                 
-                if (result.success) {
+                if (!response.ok) {
+                    showError('Error loading staff: ' + (result.error || response.statusText));
+                    return;
+                }
+                if (result.edges) {
+                    staff = result.edges.map(function (e) { return e.node; });
+                    displayStaff();
+                } else if (result.success && result.data) {
                     staff = result.data;
                     displayStaff();
                 } else {
-                    showError('Error loading staff: ' + result.error);
+                    showError('Error loading staff: unexpected response');
                 }
             } catch (error) {
                 console.error('Error loading staff:', error);
