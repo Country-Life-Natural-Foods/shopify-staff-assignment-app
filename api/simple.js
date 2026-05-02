@@ -11,6 +11,7 @@ require('@shopify/shopify-api/adapters/node');
 
 const { Session, LATEST_API_VERSION } = require('@shopify/shopify-api');
 const { shopifyApp } = require('@shopify/shopify-app-express');
+const { resolveShopifyHostName } = require('../lib/resolve-shopify-hostname');
 
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production';
@@ -48,17 +49,12 @@ app.use(session({
   },
 }));
 
-// VERCEL_URL is auto-set (hostname only, no protocol). Avoid empty hostName on Vercel.
-const vercelHost = process.env.VERCEL_URL
-  ? process.env.VERCEL_URL.replace(/^https?:\/\//, '').replace(/\/$/, '')
-  : '';
-
-const hostName =
-  process.env.SHOPIFY_HOSTNAME ||
-  process.env.HOST?.replace(/^https?:\/\//, '') ||
-  process.env.SHOPIFY_APP_URL?.replace(/^https?:\/\//, '') ||
-  vercelHost ||
-  'localhost';
+const hostName = resolveShopifyHostName();
+if (!hostName) {
+  throw new Error(
+    'Shopify API: hostName is empty in production. Set SHOPIFY_APP_URL (e.g. https://your-app.vercel.app) or SHOPIFY_HOSTNAME (hostname only). On Vercel, VERCEL_URL / VERCEL_PROJECT_PRODUCTION_URL are normally injected — confirm Environment Variables are available to this deployment.',
+  );
+}
 
 const hostScheme =
   process.env.HOST?.startsWith('https') ? 'https'
