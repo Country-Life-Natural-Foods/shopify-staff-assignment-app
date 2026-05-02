@@ -1,385 +1,468 @@
 <!DOCTYPE html>
-<html lang="en">
+<html class="light" lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>B2B Sales Director Tool</title>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Staff Manager Dashboard</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+    <script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "outline-variant": "#bdc9c2",
+                        "on-error-container": "#93000a",
+                        "on-surface-variant": "#3e4944",
+                        "primary-fixed": "#92f6cf",
+                        "error": "#ba1a1a",
+                        "on-tertiary": "#ffffff",
+                        "outline": "#6e7a73",
+                        "surface-tint": "#006c50",
+                        "on-tertiary-container": "#f5f5f6",
+                        "tertiary-fixed-dim": "#c6c6c7",
+                        "surface-container-highest": "#dee3e8",
+                        "inverse-surface": "#2c3135",
+                        "on-surface": "#171c20",
+                        "on-primary-fixed-variant": "#00513c",
+                        "inverse-primary": "#75d9b3",
+                        "tertiary": "#565859",
+                        "surface": "#f6faff",
+                        "on-tertiary-fixed": "#1a1c1d",
+                        "inverse-on-surface": "#edf1f7",
+                        "primary-container": "#008060",
+                        "surface-container-lowest": "#ffffff",
+                        "on-tertiary-fixed-variant": "#454748",
+                        "primary-fixed-dim": "#75d9b3",
+                        "on-secondary-container": "#646465",
+                        "surface-container": "#eaeef4",
+                        "on-secondary-fixed-variant": "#464748",
+                        "on-primary-container": "#d6ffeb",
+                        "secondary-fixed-dim": "#c7c6c7",
+                        "secondary": "#5e5e5f",
+                        "tertiary-fixed": "#e2e2e3",
+                        "primary": "#00654b",
+                        "background": "#f6faff",
+                        "surface-bright": "#f6faff",
+                        "surface-container-high": "#e4e9ee",
+                        "surface-variant": "#dee3e8",
+                        "on-background": "#171c20",
+                        "secondary-fixed": "#e3e2e3",
+                        "secondary-container": "#e3e2e3",
+                        "on-secondary": "#ffffff",
+                        "on-primary": "#ffffff",
+                        "on-secondary-fixed": "#1b1c1d",
+                        "tertiary-container": "#6f7071",
+                        "surface-container-low": "#f0f4f9",
+                        "error-container": "#ffdad6",
+                        "on-primary-fixed": "#002116",
+                        "on-error": "#ffffff",
+                        "surface-dim": "#d6dae0"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "margin": "20px",
+                        "gutter": "20px",
+                        "xl": "32px",
+                        "md": "16px",
+                        "sm": "8px",
+                        "lg": "24px",
+                        "base": "4px",
+                        "xs": "4px"
+                    },
+                    "fontFamily": {
+                        "body-md": ["Inter"],
+                        "heading-lg": ["Inter"],
+                        "label-md": ["Inter"],
+                        "label-sm": ["Inter"],
+                        "heading-xl": ["Inter"],
+                        "body-sm": ["Inter"],
+                        "heading-md": ["Inter"]
+                    },
+                    "fontSize": {
+                        "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "heading-lg": ["20px", {"lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "label-md": ["12px", {"lineHeight": "16px", "fontWeight": "600"}],
+                        "label-sm": ["11px", {"lineHeight": "16px", "fontWeight": "500"}],
+                        "heading-xl": ["28px", {"lineHeight": "32px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                        "body-sm": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                        "heading-md": ["16px", {"lineHeight": "24px", "fontWeight": "600"}]
+                    }
+                },
+            },
+        }
+    </script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f6f6f7; color: #333; line-height: 1.6; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        .header { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
-        .header-info h1 { color: #2c3e50; margin-bottom: 5px; }
-        .header-info p { color: #7f8c8d; }
-        .tabs { display: flex; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; overflow: hidden; }
-        .tab { flex: 1; padding: 15px 20px; background: #ecf0f1; border: none; cursor: pointer; font-size: 16px; transition: background-color 0.3s; text-align: center; font-weight: 500; }
-        .tab.active { background: #3498db; color: white; }
-        .tab:hover:not(.active) { background: #bdc3c7; }
-        .content { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); min-height: 400px; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        .loading { text-align: center; padding: 40px; color: #7f8c8d; }
-        .error { background: #e74c3c; color: white; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
-        .success { background: #27ae60; color: white; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
-        .list-item { background: #f8f9fa; padding: 15px; margin-bottom: 10px; border-radius: 4px; border-left: 4px solid #3498db; }
-        .list-item h3 { margin-bottom: 5px; color: #2c3e50; }
-        .performance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 10px; padding: 10px; background: #fff; border-radius: 4px; border: 1px solid #eee; }
-        .perf-item { text-align: center; }
-        .perf-val { font-weight: bold; color: #2ecc71; display: block; font-size: 1.1em; }
-        .perf-label { font-size: 0.8em; color: #7f8c8d; text-transform: uppercase; }
-        .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 5px; font-weight: 600; }
-        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
-        .btn { background: #3498db; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; transition: 0.3s; }
-        .btn:hover { background: #2980b9; }
-        .btn-success { background: #2ecc71; }
-        .btn-success:hover { background: #27ae60; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .rep-badge { display: inline-block; padding: 2px 8px; background: #e1f5fe; color: #0288d1; border-radius: 12px; font-size: 0.8em; margin-right: 5px; }
-        @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } .tabs { flex-direction: column; } }
+        body { font-family: 'Inter', sans-serif; background-color: #f6faff; }
+        .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+        .loading-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255,255,255,0.7); display: flex;
+            align-items: center; justify-content: center; z-index: 1000;
+            visibility: hidden; opacity: 0; transition: all 0.3s;
+        }
+        .loading-overlay.active { visibility: visible; opacity: 1; }
+        .error-toast {
+            position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+            background: #ba1a1a; color: white; padding: 12px 24px; border-radius: 8px;
+            z-index: 2000; visibility: hidden; opacity: 0; transition: all 0.3s;
+        }
+        .error-toast.active { visibility: visible; opacity: 1; }
     </style>
 </head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="header-info">
-                <h1>🚀 B2B Sales Director Tool</h1>
-                <p>Assign territories, track performance, and grow your B2B business.</p>
+<body class="bg-background text-on-background">
+<div class="loading-overlay" id="loading-overlay">
+    <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+</div>
+<div class="error-toast" id="error-toast"></div>
+
+<div class="min-h-screen flex flex-col max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-20 md:pb-8">
+    <!-- TopAppBar -->
+    <header class="h-16 flex items-center justify-between border-b border-[#E1E3E5] mb-6">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+                <span class="material-symbols-outlined text-white text-xl">assignment_turned_in</span>
             </div>
-            <div id="sync-status">
-                <button class="btn" onclick="syncMap()" id="sync-btn">Sync Map Geodata</button>
+            <h1 class="text-heading-lg font-heading-lg hidden sm:block">Staff Assignment Manager</h1>
+            <h1 class="text-heading-md font-heading-md sm:hidden">Staff Manager</h1>
+        </div>
+        <div class="flex items-center gap-4">
+            <button id="sync-btn" onclick="syncMap()" class="bg-[#008060] text-white px-4 py-2 rounded-md text-sm font-semibold hover:opacity-90 active:scale-[0.98] transition-all flex items-center gap-2 shadow-sm">
+                <span class="material-symbols-outlined text-sm">sync</span>
+                <span class="hidden sm:inline">Sync Map</span>
+                <span class="sm:hidden">Sync</span>
+            </button>
+            <div class="w-10 h-10 rounded-full border-2 border-white shadow-sm overflow-hidden bg-zinc-200">
+                <img alt="User" class="w-full h-full object-cover" src="https://ui-avatars.com/api/?name=Admin&background=008060&color=fff"/>
             </div>
         </div>
+    </header>
 
-        <div class="tabs">
-            <button class="tab active" onclick="showTab('performance')">Performance</button>
-            <button class="tab" onclick="showTab('companies')">Companies</button>
-            <button class="tab" onclick="showTab('create-business')">New Business</button>
-            <button class="tab" onclick="showTab('assignments')">Assignments</button>
-        </div>
-
-        <div class="content">
-            <div id="performance" class="tab-content active">
-                <h2>📈 Overall Performance</h2>
-                <div id="performance-content" class="loading">Loading performance data...</div>
+    <main class="flex-1 space-y-8">
+        <!-- Summary Stats Section -->
+        <section class="grid grid-cols-1 sm:grid-cols-3 gap-4 lg:gap-6">
+            <div class="bg-white p-5 rounded-lg border border-[#E1E3E5] shadow-sm">
+                <p class="text-label-sm text-secondary uppercase tracking-wider mb-2">Total B2B Revenue</p>
+                <h2 class="text-heading-xl font-heading-xl text-primary" id="revenue-stat">$0.00</h2>
+                <div class="mt-2 flex items-center text-primary text-sm font-medium">
+                    <span class="material-symbols-outlined text-sm">trending_up</span>
+                    <span class="ml-1">Live data</span>
+                </div>
             </div>
-
-            <div id="companies" class="tab-content">
-                <h2>🏢 Active Companies</h2>
-                <div id="companies-content" class="loading">Loading companies...</div>
+            <div class="bg-white p-5 rounded-lg border border-[#E1E3E5] shadow-sm">
+                <p class="text-label-sm text-secondary uppercase tracking-wider mb-2">Total Orders</p>
+                <h2 class="text-heading-xl font-heading-xl" id="orders-stat">0</h2>
+                <div class="mt-2 flex items-center text-secondary text-sm font-medium">
+                    <span class="material-symbols-outlined text-sm">shopping_cart</span>
+                    <span class="ml-1">B2B fulfillment</span>
+                </div>
             </div>
+            <div class="bg-white p-5 rounded-lg border border-[#E1E3E5] shadow-sm">
+                <p class="text-label-sm text-secondary uppercase tracking-wider mb-2">Active Companies</p>
+                <h2 class="text-heading-xl font-heading-xl" id="companies-stat">0</h2>
+                <div class="mt-2 flex items-center text-secondary text-sm font-medium">
+                    <span class="material-symbols-outlined text-sm">business</span>
+                    <span class="ml-1">Across all locations</span>
+                </div>
+            </div>
+        </section>
 
-            <div id="create-business" class="tab-content">
-                <h2>🆕 Enter New Business</h2>
-                <p style="margin-bottom: 20px; color: #666;">Onboard a new B2B client directly into Shopify.</p>
-                <form id="create-company-form">
-                    <div class="grid">
-                        <div>
-                            <h3>Company Info</h3>
-                            <div class="form-group">
-                                <label>Company Name</label>
-                                <input type="text" id="comp-name" required placeholder="e.g. Acme Corp">
-                            </div>
-                            <h3>Primary Contact</h3>
-                            <div class="form-group">
-                                <label>First Name</label>
-                                <input type="text" id="cont-first" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Last Name</label>
-                                <input type="text" id="cont-last" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Email</label>
-                                <input type="email" id="cont-email" required>
-                            </div>
-                        </div>
-                        <div>
-                            <h3>Location Address</h3>
-                            <div class="form-group">
-                                <label>Address Line 1</label>
-                                <input type="text" id="addr-1" required>
-                            </div>
-                            <div class="form-group">
-                                <label>City</label>
-                                <input type="text" id="addr-city" required>
-                            </div>
-                            <div class="form-group">
-                                <label>State / Province</label>
-                                <input type="text" id="addr-state" required>
-                            </div>
-                            <div class="form-group">
-                                <label>ZIP / Postal Code</label>
-                                <input type="text" id="addr-zip" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Country</label>
-                                <input type="text" id="addr-country" required value="United States">
-                            </div>
+        <!-- Main Grid: Companies & Rep Performance -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <!-- Left Column: Companies Table -->
+            <div class="lg:col-span-8 space-y-6">
+                <div class="bg-white border border-[#E1E3E5] rounded-lg shadow-sm overflow-hidden">
+                    <div class="p-4 border-b border-[#E1E3E5] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <h3 class="text-heading-md font-heading-md">Companies</h3>
+                        <div class="relative w-full sm:w-64">
+                            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-sm">search</span>
+                            <input id="company-search" onkeyup="renderCompanies()" class="w-full pl-10 pr-4 py-2 border border-[#BABFC3] rounded-md text-body-sm focus:ring-1 focus:ring-primary focus:border-primary outline-none" placeholder="Search companies..." type="text"/>
                         </div>
                     </div>
-                    <button type="submit" class="btn btn-success">Create B2B Company</button>
-                </form>
-            </div>
-
-            <div id="assignments" class="tab-content">
-                <h2>🔗 Staff Assignments</h2>
-                <div class="grid">
-                    <div>
-                        <h3>Assign Rep to Location</h3>
-                        <form id="assign-form">
-                            <div class="form-group">
-                                <label>Sales Rep</label>
-                                <select id="staff-select" required><option>Loading...</option></select>
-                            </div>
-                            <div class="form-group">
-                                <label>Company Location</label>
-                                <select id="location-select" required><option>Loading...</option></select>
-                            </div>
-                            <button type="submit" class="btn">Assign Rep</button>
-                        </form>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead class="bg-[#F1F2F3] border-b border-[#E1E3E5]">
+                                <tr>
+                                    <th class="px-4 py-3 text-label-md font-label-md text-secondary">Company Name</th>
+                                    <th class="px-4 py-3 text-label-md font-label-md text-secondary text-right">Revenue</th>
+                                    <th class="px-4 py-3 text-label-md font-label-md text-secondary text-center">Orders</th>
+                                    <th class="px-4 py-3 text-label-md font-label-md text-secondary text-right">AOV</th>
+                                    <th class="px-4 py-3 text-label-md font-label-md text-secondary">Last Order</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-[#E1E3E5]" id="companies-table-body">
+                                <!-- Data will be injected here -->
+                            </tbody>
+                        </table>
                     </div>
-                    <div>
-                        <h3>Bulk Territory Assignment</h3>
-                        <form id="bulk-assign-form">
-                            <div class="form-group">
-                                <label>Sales Rep</label>
-                                <select id="bulk-staff-select" required><option>Loading...</option></select>
-                            </div>
-                            <div class="form-group">
-                                <label>State/Province Territory</label>
-                                <input type="text" id="bulk-state" placeholder="e.g. Michigan" required>
-                            </div>
-                            <button type="submit" class="btn">Assign to Territory</button>
-                        </form>
+                </div>
+
+                <!-- Map/Location Visual Segment (Placeholder) -->
+                <div class="relative bg-white border border-[#E1E3E5] rounded-lg shadow-sm h-64 overflow-hidden group">
+                    <img class="w-full h-full object-cover filter grayscale-[0.2] contrast-[1.1]" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBDJpaVlqHL_TnY7r6SxpKs1CFMbL9FxlOCIi-L_6MSTTfRzbQ2UrLXRxGH-mbTATlyVG22KQ9PsTpREybkhUD8anpkUiFuFIz26ykBdSHr_7dfVLRDfXUuKYWUGloUilnL3Y4y8G0j8nBgyatCBelXkF9ao8ugLP0a0JBw2I3umhsFbKJlf0jDOsYtbEwmk9_rYgPwMyV5BZsc8O08E5P1Pcm-AP9dBcpkUsCVZ3rXZqUUrIqvYcXIN2m4C_qp3qcpGKzp90XGAOA"/>
+                    <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex flex-col justify-end p-6">
+                        <h4 class="text-white text-heading-md font-heading-md">Regional Staff Coverage</h4>
+                        <p class="text-white/80 text-body-sm max-w-md">Real-time visualization of staff allocations across current client locations.</p>
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
 
-    <script>window.shopifyApiFetch = window.fetch.bind(window);</script>
-    <script type="module" src="/shopify-session-bootstrap.js"></script>
-    <script>
-        let companies = [];
-        let staff = [];
-        let staffApiError = null;
-
-        function escapeHtmlText(s) {
-            return String(s)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;');
-        }
-
-        function apiUrl(path) {
-            const params = new URLSearchParams(window.location.search);
-            const shop = params.get('shop');
-            const host = params.get('host');
-            const q = new URLSearchParams();
-            if (shop) q.set('shop', shop);
-            if (host) q.set('host', host);
-            const qs = q.toString();
-            return qs ? `${path}?${qs}` : path;
-        }
-
-        function showTab(name) {
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.getElementById(name).classList.add('active');
-            if (event) event.target.classList.add('active');
-            if (name === 'performance' || name === 'companies') loadData();
-        }
-
-        async function loadData() {
-            try {
-                staffApiError = null;
-                const fetchOpts = { credentials: 'same-origin' };
-                const [cRes, sRes] = await Promise.all([
-                    window.shopifyApiFetch(apiUrl('/api/companies'), fetchOpts),
-                    window.shopifyApiFetch(apiUrl('/api/staff'), fetchOpts),
-                ]);
-                const cData = await cRes.json().catch(() => ({}));
-                const sData = await sRes.json().catch(() => ({}));
-                if (!cRes.ok) {
-                    const err = escapeHtmlText(cData.error || 'Could not load companies');
-                    const hint = cData.code === 'SHOPIFY_ACCESS_DENIED'
-                        ? ' This usually means the shop needs Shopify Plus for B2B companies, or the app needs reinstall for scopes.'
-                        : '';
-                    document.getElementById('performance-content').innerHTML =
-                        `<div class="error">${err}${hint}</div>`;
-                    document.getElementById('companies-content').innerHTML =
-                        `<div class="error">${err}</div>`;
-                    companies = [];
-                    staff = [];
-                    return;
-                }
-                companies = (cData.edges || []).map(e => e.node);
-                if (!sRes.ok) {
-                    staff = [];
-                    staffApiError = sData.error || 'Staff list unavailable';
-                } else {
-                    staff = (sData.edges || []).map(e => e.node);
-                }
-                renderCompanies();
-                renderPerformance();
-                populateSelects();
-            } catch (e) { console.error(e); }
-        }
-
-        function renderCompanies() {
-            const container = document.getElementById('companies-content');
-            if (!companies.length) { container.innerHTML = 'No companies found.'; return; }
-            container.innerHTML = companies.map(c => {
-                const locEdges = c.locations?.edges || [];
-                const reps = locEdges[0]?.node.staffMemberAssignments?.edges.map(e => `<span class="rep-badge">${e.node.staffMember.firstName}</span>`).join('') || '<span style="color:#999; font-size:0.8em;">Unassigned</span>';
-                const addr = locEdges[0]?.node?.shippingAddress;
-                const cityLine = addr ? `${addr.city || ''}, ${addr.province || ''}` : '';
-                return `
-                    <div class="list-item">
-                        <div style="display:flex; justify-content:space-between; align-items:start;">
-                            <div>
-                                <h3>${c.name}</h3>
-                                <p style="font-size:0.9em; color:#666;">${cityLine}</p>
-                                <div style="margin-top:5px;">${reps}</div>
-                            </div>
-                            <div style="text-align:right;">
-                                <span style="font-weight:bold; color:#2ecc71; font-size:1.2em;">$${(c.performance?.totalSpend ?? 0).toFixed(2)}</span>
-                                <div style="font-size:0.7em; color:#999; text-transform:uppercase;">Revenue</div>
-                            </div>
-                        </div>
-                        <div class="performance-grid">
-                            <div class="perf-item"><span class="perf-val">${c.performance?.orderCount ?? 0}</span><span class="perf-label">Orders</span></div>
-                            <div class="perf-item"><span class="perf-val">$${(c.performance?.avgOrderValue ?? 0).toFixed(2)}</span><span class="perf-label">AOV</span></div>
-                            <div class="perf-item"><span class="perf-val">${c.performance?.lastOrderDate ? new Date(c.performance.lastOrderDate).toLocaleDateString() : 'Never'}</span><span class="perf-label">Last Order</span></div>
-                        </div>
+            <!-- Right Column: Rep Performance & Quick Assign -->
+            <aside class="lg:col-span-4 space-y-6">
+                <!-- Rep Performance Card -->
+                <div class="bg-white border border-[#E1E3E5] rounded-lg shadow-sm p-5">
+                    <h3 class="text-heading-md font-heading-md mb-4">Rep Performance</h3>
+                    <div class="space-y-4" id="rep-performance-list">
+                        <!-- Data will be injected here -->
                     </div>
-                `;
-            }).join('');
-        }
+                </div>
 
-        function renderPerformance() {
-            const container = document.getElementById('performance-content');
-            const staffBanner = staffApiError
-                ? `<div class="error" style="margin-bottom:16px;"><strong>Staff directory:</strong> ${escapeHtmlText(staffApiError)}</div>`
-                : '';
-            const totalRev = companies.reduce((s, c) => s + (c.performance?.totalSpend ?? 0), 0);
-            const totalOrders = companies.reduce((s, c) => s + (c.performance?.orderCount ?? 0), 0);
+                <!-- Assign Staff Quick Panel -->
+                <div class="bg-white border border-[#E1E3E5] rounded-lg shadow-sm p-5">
+                    <div class="flex items-center gap-2 mb-4">
+                        <span class="material-symbols-outlined text-[#008060]">person_add</span>
+                        <h3 class="text-heading-md font-heading-md">Assign Staff</h3>
+                    </div>
+                    <form id="assign-form" class="space-y-4">
+                        <div>
+                            <label class="block text-label-sm text-secondary mb-1">Select Staff Member</label>
+                            <select id="staff-select" class="w-full border border-[#BABFC3] rounded-md px-3 py-2 text-body-sm focus:ring-1 focus:ring-primary outline-none">
+                                <option>Loading staff...</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-label-sm text-secondary mb-1">Company / Location</label>
+                            <select id="location-select" class="w-full border border-[#BABFC3] rounded-md px-3 py-2 text-body-sm focus:ring-1 focus:ring-primary outline-none">
+                                <option>Loading locations...</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="w-full bg-[#008060] text-white py-2 rounded-md text-sm font-semibold hover:opacity-90 active:scale-[0.98] transition-all">
+                            Confirm Assignment
+                        </button>
+                    </form>
+                </div>
+            </aside>
+        </div>
+    </main>
+</div>
+
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="md:hidden fixed bottom-0 left-0 w-full z-50 flex justify-around items-center bg-white h-16 pb-safe border-t border-zinc-200 shadow-lg">
+    <a class="flex flex-col items-center gap-1 text-[#008060] font-bold" href="#">
+        <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">home</span>
+        <span class="text-[11px]">Home</span>
+    </a>
+    <a class="flex flex-col items-center gap-1 text-zinc-500" href="#">
+        <span class="material-symbols-outlined">group</span>
+        <span class="text-[11px]">Staff</span>
+    </a>
+    <a class="flex flex-col items-center gap-1 text-zinc-500" href="#">
+        <span class="material-symbols-outlined">map</span>
+        <span class="text-[11px]">Locations</span>
+    </a>
+    <a class="flex flex-col items-center gap-1 text-zinc-500" href="#">
+        <span class="material-symbols-outlined">bar_chart</span>
+        <span class="text-[11px]">Reports</span>
+    </a>
+</nav>
+
+<script>window.shopifyApiFetch = window.fetch.bind(window);</script>
+<script type="module" src="/shopify-session-bootstrap.js"></script>
+<script>
+    let companies = [];
+    let staff = [];
+
+    function apiUrl(path) {
+        const params = new URLSearchParams(window.location.search);
+        const shop = params.get('shop');
+        const host = params.get('host');
+        const q = new URLSearchParams();
+        if (shop) q.set('shop', shop);
+        if (host) q.set('host', host);
+        const qs = q.toString();
+        return qs ? `${path}?${qs}` : path;
+    }
+
+    function setLoading(active) {
+        document.getElementById('loading-overlay').classList.toggle('active', active);
+    }
+
+    function showError(msg) {
+        const toast = document.getElementById('error-toast');
+        toast.textContent = msg;
+        toast.classList.add('active');
+        setTimeout(() => toast.classList.remove('active'), 5000);
+    }
+
+    async function loadData() {
+        setLoading(true);
+        try {
+            const [cRes, sRes] = await Promise.all([
+                window.shopifyApiFetch(apiUrl('/api/companies')),
+                window.shopifyApiFetch(apiUrl('/api/staff'))
+            ]);
+
+            const cData = await cRes.json();
+            const sData = await sRes.json();
+
+            if (!cRes.ok) throw new Error(cData.error || 'Failed to load companies');
             
-            // Calculate rep performance
-            const repPerformance = {};
-            companies.forEach(c => {
-                const spend = c.performance?.totalSpend ?? 0;
-                (c.locations?.edges || []).forEach(l => {
-                    const assigns = l.node?.staffMemberAssignments?.edges || [];
-                    assigns.forEach(a => {
-                        const sm = a.node?.staffMember;
-                        const name = sm ? `${sm.firstName} ${sm.lastName}` : '';
-                        if (!name) return;
-                        if (!repPerformance[name]) repPerformance[name] = 0;
-                        repPerformance[name] += spend;
-                    });
+            companies = (cData.edges || []).map(e => e.node);
+            staff = (sData.edges || []).map(e => e.node);
+
+            renderSummary();
+            renderCompanies();
+            renderPerformance();
+            populateSelects();
+        } catch (e) {
+            console.error(e);
+            showError(e.message);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    function renderSummary() {
+        const totalRev = companies.reduce((s, c) => s + (c.performance?.totalSpend ?? 0), 0);
+        const totalOrders = companies.reduce((s, c) => s + (c.performance?.orderCount ?? 0), 0);
+
+        document.getElementById('revenue-stat').textContent = '$' + totalRev.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        document.getElementById('orders-stat').textContent = totalOrders.toLocaleString();
+        document.getElementById('companies-stat').textContent = companies.length.toLocaleString();
+    }
+
+    function renderCompanies() {
+        const search = document.getElementById('company-search').value.toLowerCase();
+        const filtered = companies.filter(c => c.name.toLowerCase().includes(search));
+        const body = document.getElementById('companies-table-body');
+
+        body.innerHTML = filtered.map(c => `
+            <tr class="hover:bg-zinc-50 transition-colors">
+                <td class="px-4 py-4 font-medium text-body-sm">${c.name}</td>
+                <td class="px-4 py-4 text-body-sm text-right">$${(c.performance?.totalSpend ?? 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                <td class="px-4 py-4 text-body-sm text-center">${c.performance?.orderCount ?? 0}</td>
+                <td class="px-4 py-4 text-body-sm text-right">$${(c.performance?.avgOrderValue ?? 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                <td class="px-4 py-4 text-body-sm text-secondary">${c.performance?.lastOrderDate ? new Date(c.performance.lastOrderDate).toLocaleDateString() : 'Never'}</td>
+            </tr>
+        `).join('') || '<tr><td colspan="5" class="px-4 py-8 text-center text-secondary">No companies found</td></tr>';
+    }
+
+    function renderPerformance() {
+        const repPerf = {};
+        companies.forEach(c => {
+            const spend = c.performance?.totalSpend ?? 0;
+            (c.locations?.edges || []).forEach(l => {
+                const assigns = l.node?.staffMemberAssignments?.edges || [];
+                assigns.forEach(a => {
+                    const sm = a.node?.staffMember;
+                    if (!sm) return;
+                    const id = sm.id;
+                    if (!repPerf[id]) repPerf[id] = { name: `${sm.firstName} ${sm.lastName}`, revenue: 0, accounts: new Set() };
+                    repPerf[id].revenue += spend;
+                    repPerf[id].accounts.add(c.id);
                 });
             });
+        });
 
-            container.innerHTML = staffBanner + `
-                <div class="performance-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 30px;">
-                    <div class="perf-item"><span class="perf-val" style="font-size: 2em;">$${totalRev.toFixed(2)}</span><span class="perf-label">Total B2B Revenue</span></div>
-                    <div class="perf-item"><span class="perf-val" style="font-size: 2em;">${totalOrders}</span><span class="perf-label">Total Orders</span></div>
-                    <div class="perf-item"><span class="perf-val" style="font-size: 2em;">${companies.length}</span><span class="perf-label">Active Companies</span></div>
-                </div>
-                
-                <div class="grid">
-                    <div>
-                        <h3>🏆 Top Companies</h3>
-                        <div style="margin-top:15px; background:#f9f9f9; border-radius:8px; padding:10px;">
-                            ${[...companies].sort((a,b) => (b.performance?.totalSpend ?? 0) - (a.performance?.totalSpend ?? 0)).slice(0, 5).map(c => `
-                                <div style="display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid #eee;">
-                                    <span>${c.name}</span>
-                                    <span style="font-weight: bold; color:#2ecc71;">$${(c.performance?.totalSpend ?? 0).toFixed(2)}</span>
-                                </div>
-                            `).join('')}
+        const list = document.getElementById('rep-performance-list');
+        const sorted = Object.values(repPerf).sort((a,b) => b.revenue - a.revenue);
+
+        list.innerHTML = sorted.map(rep => {
+            const initials = rep.name.split(' ').map(n => n[0]).join('').toUpperCase();
+            return `
+                <div class="flex items-center justify-between p-3 hover:bg-zinc-50 rounded-lg transition-colors">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-full bg-primary-fixed flex items-center justify-center text-on-primary-fixed font-bold">${initials}</div>
+                        <div>
+                            <p class="text-body-sm font-semibold">${rep.name}</p>
+                            <p class="text-label-sm text-secondary">${rep.accounts.size} Active Accounts</p>
                         </div>
                     </div>
-                    <div>
-                        <h3>👨‍💼 Rep Performance</h3>
-                        <div style="margin-top:15px; background:#f9f9f9; border-radius:8px; padding:10px;">
-                            ${Object.entries(repPerformance).sort((a,b) => b[1] - a[1]).map(([name, val]) => `
-                                <div style="display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid #eee;">
-                                    <span>${name}</span>
-                                    <span style="font-weight: bold; color:#3498db;">$${val.toFixed(2)}</span>
-                                </div>
-                            `).join('') || '<p style="padding:10px; color:#999;">No rep data available.</p>'}
-                        </div>
+                    <div class="text-right">
+                        <p class="text-body-sm font-bold text-primary">$${(rep.revenue / 1000).toFixed(1)}k</p>
+                        <p class="text-label-sm text-secondary">Attributed</p>
                     </div>
                 </div>
             `;
-        }
+        }).join('') || '<p class="text-secondary text-center py-4">No rep data available</p>';
+    }
 
-        function populateSelects() {
-            const sHtml = staff.map(s => `<option value="${s.id}">${s.firstName} ${s.lastName}</option>`).join('');
-            document.getElementById('staff-select').innerHTML = sHtml;
-            document.getElementById('bulk-staff-select').innerHTML = sHtml;
-            
-            const lHtml = companies.flatMap(c => (c.locations?.edges || []).map(e => `<option value="${e.node.id}">${c.name} - ${e.node.name}</option>`)).join('');
-            document.getElementById('location-select').innerHTML = lHtml;
-        }
+    function populateSelects() {
+        const sSelect = document.getElementById('staff-select');
+        sSelect.innerHTML = '<option value="">Select a rep...</option>' + staff.map(s => `<option value="${s.id}">${s.firstName} ${s.lastName}</option>`).join('');
 
-        async function syncMap() {
-            const btn = document.getElementById('sync-btn');
-            btn.disabled = true;
-            btn.textContent = 'Syncing...';
-            try {
-                const res = await window.shopifyApiFetch(apiUrl('/api/sync-b2b-map'), { method: 'POST', credentials: 'same-origin' });
-                const data = await res.json();
-                alert(`Sync Complete! Created: ${data.created}, Updated: ${data.updated}`);
-            } catch (e) { alert('Sync failed: ' + e.message); }
+        const lSelect = document.getElementById('location-select');
+        const locations = [];
+        companies.forEach(c => {
+            (c.locations?.edges || []).forEach(le => {
+                locations.push({ id: le.node.id, label: `${c.name} - ${le.node.name}` });
+            });
+        });
+        lSelect.innerHTML = '<option value="">Select a location...</option>' + locations.map(l => `<option value="${l.id}">${l.label}</option>`).join('');
+    }
+
+    async function syncMap() {
+        const btn = document.getElementById('sync-btn');
+        const original = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="material-symbols-outlined text-sm animate-spin">sync</span> Syncing...';
+
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/sync-b2b-map'), { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Sync failed');
+            alert(`Sync Complete! Created: ${data.created}, Updated: ${data.updated}`);
+        } catch (e) {
+            showError('Sync failed: ' + e.message);
+        } finally {
             btn.disabled = false;
-            btn.textContent = 'Sync Map Geodata';
+            btn.innerHTML = original;
+        }
+    }
+
+    document.getElementById('assign-form').onsubmit = async (e) => {
+        e.preventDefault();
+        const staffId = document.getElementById('staff-select').value;
+        const locId = document.getElementById('location-select').value;
+
+        if (!staffId || !locId) {
+            showError('Please select both a staff member and a location');
+            return;
         }
 
-        document.getElementById('create-company-form').onsubmit = async (e) => {
-            e.preventDefault();
-            const body = {
-                companyName: document.getElementById('comp-name').value,
-                contactFirstName: document.getElementById('cont-first').value,
-                contactLastName: document.getElementById('cont-last').value,
-                contactEmail: document.getElementById('cont-email').value,
-                address: {
-                    address1: document.getElementById('addr-1').value,
-                    city: document.getElementById('addr-city').value,
-                    province: document.getElementById('addr-state').value,
-                    zip: document.getElementById('addr-zip').value,
-                    country: document.getElementById('addr-country').value,
-                }
-            };
-            const res = await window.shopifyApiFetch(apiUrl('/api/companies'), { method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
-            if (res.ok) { alert('Company Created!'); loadData(); showTab('companies'); }
-        };
-
-        document.getElementById('assign-form').onsubmit = async (e) => {
-            e.preventDefault();
+        setLoading(true);
+        try {
             const res = await window.shopifyApiFetch(apiUrl('/api/assign'), {
                 method: 'POST',
-                credentials: 'same-origin',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    staffId: document.getElementById('staff-select').value,
-                    companyLocationId: document.getElementById('location-select').value
-                })
+                body: JSON.stringify({ staffId, companyLocationId: locId })
             });
-            if (res.ok) alert('Assigned!');
-        };
-
-        let loadDataStarted = false;
-        function startLoadDataOnce() {
-            if (loadDataStarted) return;
-            loadDataStarted = true;
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Assignment failed');
+            alert('Staff member assigned successfully!');
             loadData();
+        } catch (e) {
+            showError(e.message);
+        } finally {
+            setLoading(false);
         }
-        window.addEventListener('shopify:api-fetch-ready', startLoadDataOnce, { once: true });
-        window.addEventListener('load', startLoadDataOnce, { once: true });
-    </script>
+    };
+
+    let started = false;
+    function init() {
+        if (started) return;
+        started = true;
+        loadData();
+    }
+    window.addEventListener('shopify:api-fetch-ready', init, { once: true });
+    window.addEventListener('load', init, { once: true });
+</script>
 </body>
 </html>

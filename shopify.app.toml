@@ -14,7 +14,7 @@ redirect_urls = [
 [access_scopes]
 # read_users is restricted: shopify app deploy rejects it until Shopify Partner grants access for StaffMember APIs.
 # After approval, add read_users back here and in api/index.js scopes, then deploy and have merchants reinstall.
-scopes = "read_companies,write_companies,read_orders,read_customers,write_customers"
+scopes = "read_companies,write_companies,read_orders,read_customers,write_customers,read_users"
 
 [webhooks]
 api_version = "2026-01"

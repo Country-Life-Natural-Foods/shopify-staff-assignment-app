@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Staff Manager Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "outline-variant": "#bdc9c2",
+                        "on-error-container": "#93000a",
+                        "on-surface-variant": "#3e4944",
+                        "primary-fixed": "#92f6cf",
+                        "error": "#ba1a1a",
+                        "on-tertiary": "#ffffff",
+                        "outline": "#6e7a73",
+                        "surface-tint": "#006c50",
+                        "on-tertiary-container": "#f5f5f6",
+                        "tertiary-fixed-dim": "#c6c6c7",
+                        "surface-container-highest": "#dee3e8",
+                        "inverse-surface": "#2c3135",
+                        "on-surface": "#171c20",
+                        "on-primary-fixed-variant": "#00513c",
+                        "inverse-primary": "#75d9b3",
+                        "tertiary": "#565859",
+                        "surface": "#f6faff",
+                        "on-tertiary-fixed": "#1a1c1d",
+                        "inverse-on-surface": "#edf1f7",
+                        "primary-container": "#008060",
+                        "surface-container-lowest": "#ffffff",
+                        "on-tertiary-fixed-variant": "#454748",
+                        "primary-fixed-dim": "#75d9b3",
+                        "on-secondary-container": "#646465",
+                        "surface-container": "#eaeef4",
+                        "on-secondary-fixed-variant": "#464748",
+                        "on-primary-container": "#d6ffeb",
+                        "secondary-fixed-dim": "#c7c6c7",
+                        "secondary": "#5e5e5f",
+                        "tertiary-fixed": "#e2e2e3",
+                        "primary": "#00654b",
+                        "background": "#f6faff",
+                        "surface-bright": "#f6faff",
+                        "surface-container-high": "#e4e9ee",
+                        "surface-variant": "#dee3e8",
+                        "on-background": "#171c20",
+                        "secondary-fixed": "#e3e2e3",
+                        "secondary-container": "#e3e2e3",
+                        "on-secondary": "#ffffff",
+                        "on-primary": "#ffffff",
+                        "on-secondary-fixed": "#1b1c1d",
+                        "tertiary-container": "#6f7071",
+                        "surface-container-low": "#f0f4f9",
+                        "error-container": "#ffdad6",
+                        "on-primary-fixed": "#002116",
+                        "on-error": "#ffffff",
+                        "surface-dim": "#d6dae0"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "margin": "20px",
+                        "gutter": "20px",
+                        "xl": "32px",
+                        "md": "16px",
+                        "sm": "8px",
+                        "lg": "24px",
+                        "base": "4px",
+                        "xs": "4px"
+                    },
+                    "fontFamily": {
+                        "body-md": ["Inter"],
+                        "heading-lg": ["Inter"],
+                        "label-md": ["Inter"],
+                        "label-sm": ["Inter"],
+                        "heading-xl": ["Inter"],
+                        "body-sm": ["Inter"],
+                        "heading-md": ["Inter"]
+                    },
+                    "fontSize": {
+                        "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "heading-lg": ["20px", {"lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "label-md": ["12px", {"lineHeight": "16px", "fontWeight": "600"}],
+                        "label-sm": ["11px", {"lineHeight": "16px", "fontWeight": "500"}],
+                        "heading-xl": ["28px", {"lineHeight": "32px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                        "body-sm": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                        "heading-md": ["16px", {"lineHeight": "24px", "fontWeight": "600"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        body {
+            background-color: #F6F6F7;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="font-body-md text-on-surface">
+<!-- TopAppBar -->
+<header class="fixed top-0 w-full z-50 flex justify-between items-center px-4 h-14 bg-[#F6F6F7] dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-zinc-600">menu</span>
+<h1 class="text-lg font-bold text-zinc-900 dark:text-white font-['Inter'] antialiased">Staff Assignments</h1>
+</div>
+<button class="bg-[#008060] text-white px-3 py-1.5 rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity active:scale-95">
+            Sync Map
+        </button>
+</header>
+<div class="flex pt-14 pb-20 md:pb-0">
+<!-- NavigationDrawer (Desktop Only) -->
+<nav class="hidden md:flex flex-col p-4 space-y-2 fixed left-0 h-full w-64 bg-white dark:bg-zinc-900 border-r border-zinc-200 dark:border-zinc-800">
+<div class="mb-6 px-2">
+<span class="text-xl font-extrabold text-zinc-900 dark:text-zinc-100 font-['Inter']">Staff Manager</span>
+</div>
+<a class="flex items-center gap-3 px-3 py-2 bg-zinc-100 dark:bg-zinc-800 text-[#008060] dark:text-[#00a37b] rounded-md font-semibold transition-colors" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span class="font-['Inter'] text-sm">Dashboard</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 rounded-md font-medium transition-colors" href="#">
+<span class="material-symbols-outlined">location_on</span>
+<span class="font-['Inter'] text-sm">Locations</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 rounded-md font-medium transition-colors" href="#">
+<span class="material-symbols-outlined">badge</span>
+<span class="font-['Inter'] text-sm">Staff</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 rounded-md font-medium transition-colors" href="#">
+<span class="material-symbols-outlined">analytics</span>
+<span class="font-['Inter'] text-sm">Performance</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 rounded-md font-medium transition-colors" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span class="font-['Inter'] text-sm">Settings</span>
+</a>
+</nav>
+<!-- Main Content Area -->
+<main class="flex-1 md:ml-64 p-4 lg:p-8 max-w-[1200px] mx-auto w-full">
+<!-- Metrics Section -->
+<section class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
+<div class="bg-white border border-[#E1E3E5] p-5 rounded-lg shadow-sm">
+<p class="text-label-md font-label-md text-secondary mb-1">Total B2B Revenue</p>
+<h2 class="text-heading-xl font-heading-xl text-on-surface">$1,420,850.00</h2>
+<div class="mt-2 flex items-center text-primary text-sm font-medium">
+<span class="material-symbols-outlined text-sm">trending_up</span>
+<span class="ml-1">+12.5% from last month</span>
+</div>
+</div>
+<div class="bg-white border border-[#E1E3E5] p-5 rounded-lg shadow-sm">
+<p class="text-label-md font-label-md text-secondary mb-1">Total Orders</p>
+<h2 class="text-heading-xl font-heading-xl text-on-surface">8,642</h2>
+<div class="mt-2 flex items-center text-primary text-sm font-medium">
+<span class="material-symbols-outlined text-sm">trending_up</span>
+<span class="ml-1">+4.2% from last month</span>
+</div>
+</div>
+<div class="bg-white border border-[#E1E3E5] p-5 rounded-lg shadow-sm">
+<p class="text-label-md font-label-md text-secondary mb-1">Active Companies</p>
+<h2 class="text-heading-xl font-heading-xl text-on-surface">342</h2>
+<div class="mt-2 flex items-center text-secondary text-sm font-medium">
+<span class="material-symbols-outlined text-sm">horizontal_rule</span>
+<span class="ml-1">Stable across regions</span>
+</div>
+</div>
+</section>
+<!-- Main Grid: Companies & Rep Performance -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+<!-- Left Column: Companies Table -->
+<div class="lg:col-span-8 space-y-6">
+<div class="bg-white border border-[#E1E3E5] rounded-lg shadow-sm overflow-hidden">
+<div class="p-4 border-b border-[#E1E3E5] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+<h3 class="text-heading-md font-heading-md">Companies</h3>
+<div class="relative w-full sm:w-64">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-sm">search</span>
+<input class="w-full pl-10 pr-4 py-2 border border-[#BABFC3] rounded-md text-body-sm focus:ring-1 focus:ring-primary focus:border-primary outline-none" placeholder="Search companies..." type="text"/>
+</div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead class="bg-[#F1F2F3] border-b border-[#E1E3E5]">
+<tr>
+<th class="px-4 py-3 text-label-md font-label-md text-secondary">Company Name</th>
+<th class="px-4 py-3 text-label-md font-label-md text-secondary text-right">Revenue</th>
+<th class="px-4 py-3 text-label-md font-label-md text-secondary text-center">Orders</th>
+<th class="px-4 py-3 text-label-md font-label-md text-secondary text-right">AOV</th>
+<th class="px-4 py-3 text-label-md font-label-md text-secondary">Last Order</th>
+<th class="px-4 py-3"></th>
+</tr>
+</thead>
+<tbody class="divide-y divide-[#E1E3E5]">
+<tr class="hover:bg-zinc-50 transition-colors">
+<td class="px-4 py-4 font-medium text-body-sm">Global Tech Solutions</td>
+<td class="px-4 py-4 text-body-sm text-right">$45,200.00</td>
+<td class="px-4 py-4 text-body-sm text-center">124</td>
+<td class="px-4 py-4 text-body-sm text-right">$364.50</td>
+<td class="px-4 py-4 text-body-sm text-secondary">Oct 24, 2023</td>
+<td class="px-4 py-4 text-right">
+<button class="text-primary font-semibold text-sm hover:underline">Assign</button>
+</td>
+</tr>
+<tr class="hover:bg-zinc-50 transition-colors">
+<td class="px-4 py-4 font-medium text-body-sm">Nordic Design Lab</td>
+<td class="px-4 py-4 text-body-sm text-right">$32,150.00</td>
+<td class="px-4 py-4 text-body-sm text-center">89</td>
+<td class="px-4 py-4 text-body-sm text-right">$361.24</td>
+<td class="px-4 py-4 text-body-sm text-secondary">Oct 23, 2023</td>
+<td class="px-4 py-4 text-right">
+<button class="text-primary font-semibold text-sm hover:underline">Assign</button>
+</td>
+</tr>
+<tr class="hover:bg-zinc-50 transition-colors">
+<td class="px-4 py-4 font-medium text-body-sm">Urban Supply Co.</td>
+<td class="px-4 py-4 text-body-sm text-right">$12,800.00</td>
+<td class="px-4 py-4 text-body-sm text-center">45</td>
+<td class="px-4 py-4 text-body-sm text-right">$284.44</td>
+<td class="px-4 py-4 text-body-sm text-secondary">Oct 22, 2023</td>
+<td class="px-4 py-4 text-right">
+<button class="text-primary font-semibold text-sm hover:underline">Assign</button>
+</td>
+</tr>
+<tr class="hover:bg-zinc-50 transition-colors">
+<td class="px-4 py-4 font-medium text-body-sm">Vanguard Logistics</td>
+<td class="px-4 py-4 text-body-sm text-right">$88,420.00</td>
+<td class="px-4 py-4 text-body-sm text-center">312</td>
+<td class="px-4 py-4 text-body-sm text-right">$283.40</td>
+<td class="px-4 py-4 text-body-sm text-secondary">Oct 25, 2023</td>
+<td class="px-4 py-4 text-right">
+<button class="text-primary font-semibold text-sm hover:underline">Assign</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="p-4 border-t border-[#E1E3E5] flex justify-center">
+<button class="text-body-sm text-secondary hover:text-primary transition-colors">View all 342 companies</button>
+</div>
+</div>
+<!-- Map/Location Visual Segment -->
+<div class="relative bg-white border border-[#E1E3E5] rounded-lg shadow-sm h-64 overflow-hidden group">
+<img class="w-full h-full object-cover filter grayscale-[0.2] contrast-[1.1]" data-alt="A sophisticated digital heat map showing global sales distribution across a minimalist world map. The interface uses a clean Shopify-inspired color palette with soft green indicators showing high-density staff assignment zones. The lighting is diffused and professional, conveying a sense of organized data visualization and high-tech logistics management." data-location="New York" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBDJpaVlqHL_TnY7r6SxpKs1CFMbL9FxlOCIi-L_6MSTTfRzbQ2UrLXRxGH-mbTATlyVG22KQ9PsTpREybkhUD8anpkUiFuFIz26ykBdSHr_7dfVLRDfXUuKYWUGloUilnL3Y4y8G0j8nBgyatCBelXkF9ao8ugLP0a0JBw2I3umhsFbKJlf0jDOsYtbEwmk9_rYgPwMyV5BZsc8O08E5P1Pcm-AP9dBcpkUsCVZ3rXZqUUrIqvYcXIN2m4C_qp3qcpGKzp90XGAOA"/>
+<div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex flex-col justify-end p-6">
+<h4 class="text-white text-heading-md font-heading-md">Regional Staff Coverage</h4>
+<p class="text-white/80 text-body-sm max-w-md">Real-time visualization of staff allocations across current client locations.</p>
+</div>
+<button class="absolute top-4 right-4 bg-white/90 backdrop-blur text-zinc-900 px-4 py-2 rounded shadow-lg text-sm font-semibold flex items-center gap-2 hover:bg-white transition-all">
+<span class="material-symbols-outlined text-sm">fullscreen</span>
+                            Expand View
+                        </button>
+</div>
+</div>
+<!-- Right Column: Rep Performance & Quick Assign -->
+<aside class="lg:col-span-4 space-y-6">
+<!-- Rep Performance Card -->
+<div class="bg-white border border-[#E1E3E5] rounded-lg shadow-sm p-5">
+<h3 class="text-heading-md font-heading-md mb-4">Rep Performance</h3>
+<div class="space-y-4">
+<div class="flex items-center justify-between p-3 hover:bg-zinc-50 rounded-lg transition-colors">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-primary-fixed flex items-center justify-center text-on-primary-fixed font-bold">SM</div>
+<div>
+<p class="text-body-sm font-semibold">Sarah Miller</p>
+<p class="text-label-sm text-secondary">24 Active Accounts</p>
+</div>
+</div>
+<div class="text-right">
+<p class="text-body-sm font-bold text-primary">$210.5k</p>
+<p class="text-label-sm text-secondary">Attributed</p>
+</div>
+</div>
+<div class="flex items-center justify-between p-3 hover:bg-zinc-50 rounded-lg transition-colors">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-secondary-fixed flex items-center justify-center text-on-secondary-fixed font-bold">JB</div>
+<div>
+<p class="text-body-sm font-semibold">James Brown</p>
+<p class="text-label-sm text-secondary">18 Active Accounts</p>
+</div>
+</div>
+<div class="text-right">
+<p class="text-body-sm font-bold text-primary">$185.2k</p>
+<p class="text-label-sm text-secondary">Attributed</p>
+</div>
+</div>
+<div class="flex items-center justify-between p-3 hover:bg-zinc-50 rounded-lg transition-colors">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-tertiary-fixed flex items-center justify-center text-on-tertiary-fixed font-bold">EK</div>
+<div>
+<p class="text-body-sm font-semibold">Elena Kovac</p>
+<p class="text-label-sm text-secondary">31 Active Accounts</p>
+</div>
+</div>
+<div class="text-right">
+<p class="text-body-sm font-bold text-primary">$342.9k</p>
+<p class="text-label-sm text-secondary">Attributed</p>
+</div>
+</div>
+</div>
+<button class="w-full mt-4 py-2 border border-[#BABFC3] rounded-md text-sm font-medium hover:bg-zinc-50 transition-colors">View All Staff</button>
+</div>
+<!-- Assign Staff Quick Panel -->
+<div class="bg-white border border-[#E1E3E5] rounded-lg shadow-sm p-5">
+<div class="flex items-center gap-2 mb-4">
+<span class="material-symbols-outlined text-[#008060]">person_add</span>
+<h3 class="text-heading-md font-heading-md">Assign Staff</h3>
+</div>
+<div class="space-y-4">
+<div>
+<label class="block text-label-sm text-secondary mb-1">Select Staff Member</label>
+<select class="w-full border border-[#BABFC3] rounded-md px-3 py-2 text-body-sm focus:ring-1 focus:ring-primary outline-none">
+<option>Select a rep...</option>
+<option>Sarah Miller</option>
+<option>James Brown</option>
+<option>Elena Kovac</option>
+</select>
+</div>
+<div>
+<label class="block text-label-sm text-secondary mb-1">Company / Location</label>
+<select class="w-full border border-[#BABFC3] rounded-md px-3 py-2 text-body-sm focus:ring-1 focus:ring-primary outline-none">
+<option>Search locations...</option>
+<option>Global Tech (NYC)</option>
+<option>Nordic Lab (Stockholm)</option>
+<option>Urban Supply (London)</option>
+</select>
+</div>
+<button class="w-full bg-[#008060] text-white py-2 rounded-md text-sm font-semibold hover:opacity-90 active:scale-[0.98] transition-all">
+                                Confirm Assignment
+                            </button>
+</div>
+</div>
+</aside>
+</div>
+</main>
+</div>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="md:hidden fixed bottom-0 left-0 w-full z-50 flex justify-around items-center bg-white dark:bg-zinc-900 h-16 pb-safe border-t border-zinc-200 dark:border-zinc-800 shadow-lg">
+<a class="flex flex-col items-center gap-1 text-[#008060] dark:text-[#00a37b] font-bold" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">home</span>
+<span class="font-['Inter'] text-[11px]">Home</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-zinc-500 dark:text-zinc-400" href="#">
+<span class="material-symbols-outlined">group</span>
+<span class="font-['Inter'] text-[11px]">Staff</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-zinc-500 dark:text-zinc-400" href="#">
+<span class="material-symbols-outlined">map</span>
+<span class="font-['Inter'] text-[11px]">Locations</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-zinc-500 dark:text-zinc-400" href="#">
+<span class="material-symbols-outlined">bar_chart</span>
+<span class="font-['Inter'] text-[11px]">Reports</span>
+</a>
+</nav>
+</body></html>

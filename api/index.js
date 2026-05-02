@@ -14,7 +14,7 @@ require('@shopify/shopify-api/adapters/node');
 
 const {
   Session,
-  LATEST_API_VERSION,
+  ApiVersion,
   GraphqlQueryError,
   HttpResponseError,
 } = require('@shopify/shopify-api');
@@ -207,10 +207,11 @@ const shopifyAppInstance = shopifyApp({
       'read_customers',
       'write_customers',
       'read_orders',
+      'read_users',
     ],
     hostName,
     hostScheme,
-    apiVersion: LATEST_API_VERSION,
+    apiVersion: ApiVersion.October24,
     isEmbeddedApp: true,
   },
   auth: {
@@ -255,7 +256,7 @@ app.get(
   shopifyCspHeaders,
   (req, res) => {
     try {
-      const homeHtml = process.env.APP_HOME_HTML || 'simple.html';
+      const homeHtml = process.env.APP_HOME_HTML || 'index.html';
       sendAppHtmlFile(res, homeHtml);
     } catch (error) {
       console.error('Error loading app:', error);
