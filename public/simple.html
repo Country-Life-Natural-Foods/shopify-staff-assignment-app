@@ -243,6 +243,8 @@
         </div>
     </div>
 
+    <script>window.shopifyApiFetch = window.fetch.bind(window);</script>
+    <script type="module" src="/shopify-session-bootstrap.js"></script>
     <script>
         let companies = [];
         let staff = [];
@@ -288,7 +290,7 @@
         async function loadCompanies() {
             try {
                 console.log('Loading companies...');
-                const response = await fetch(apiUrl('/api/companies'), { credentials: 'same-origin' });
+                const response = await window.shopifyApiFetch(apiUrl('/api/companies'), { credentials: 'same-origin' });
                 const result = await response.json();
                 
                 console.log('Companies response:', result);
@@ -361,7 +363,7 @@
         async function loadStaff() {
             try {
                 console.log('Loading staff...');
-                const response = await fetch(apiUrl('/api/staff'), { credentials: 'same-origin' });
+                const response = await window.shopifyApiFetch(apiUrl('/api/staff'), { credentials: 'same-origin' });
                 const result = await response.json();
                 
                 console.log('Staff response:', result);
@@ -443,9 +445,16 @@
             content.innerHTML = `<div class="error">${message}</div>`;
         }
 
-        // Load initial data
-        document.addEventListener('DOMContentLoaded', function() {
+        // Wait for App Bridge session bootstrap when embedded (avoid unauthenticated API race).
+        let overviewStarted = false;
+        function startOverviewOnce() {
+            if (overviewStarted) return;
+            overviewStarted = true;
             loadOverview();
+        }
+        document.addEventListener('DOMContentLoaded', function() {
+            window.addEventListener('shopify:api-fetch-ready', startOverviewOnce, { once: true });
+            window.addEventListener('load', startOverviewOnce, { once: true });
         });
     </script>
 </body>

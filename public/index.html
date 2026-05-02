@@ -158,6 +158,8 @@
         </div>
     </div>
 
+    <script>window.shopifyApiFetch = window.fetch.bind(window);</script>
+    <script type="module" src="/shopify-session-bootstrap.js"></script>
     <script>
         let companies = [];
         let staff = [];
@@ -195,8 +197,8 @@
                 staffApiError = null;
                 const fetchOpts = { credentials: 'same-origin' };
                 const [cRes, sRes] = await Promise.all([
-                    fetch(apiUrl('/api/companies'), fetchOpts),
-                    fetch(apiUrl('/api/staff'), fetchOpts),
+                    window.shopifyApiFetch(apiUrl('/api/companies'), fetchOpts),
+                    window.shopifyApiFetch(apiUrl('/api/staff'), fetchOpts),
                 ]);
                 const cData = await cRes.json().catch(() => ({}));
                 const sData = await sRes.json().catch(() => ({}));
@@ -322,7 +324,7 @@
             btn.disabled = true;
             btn.textContent = 'Syncing...';
             try {
-                const res = await fetch(apiUrl('/api/sync-b2b-map'), { method: 'POST', credentials: 'same-origin' });
+                const res = await window.shopifyApiFetch(apiUrl('/api/sync-b2b-map'), { method: 'POST', credentials: 'same-origin' });
                 const data = await res.json();
                 alert(`Sync Complete! Created: ${data.created}, Updated: ${data.updated}`);
             } catch (e) { alert('Sync failed: ' + e.message); }
@@ -345,13 +347,13 @@
                     country: document.getElementById('addr-country').value,
                 }
             };
-            const res = await fetch(apiUrl('/api/companies'), { method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+            const res = await window.shopifyApiFetch(apiUrl('/api/companies'), { method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
             if (res.ok) { alert('Company Created!'); loadData(); showTab('companies'); }
         };
 
         document.getElementById('assign-form').onsubmit = async (e) => {
             e.preventDefault();
-            const res = await fetch(apiUrl('/api/assign'), {
+            const res = await window.shopifyApiFetch(apiUrl('/api/assign'), {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: {'Content-Type': 'application/json'},
@@ -363,7 +365,14 @@
             if (res.ok) alert('Assigned!');
         };
 
-        window.onload = loadData;
+        let loadDataStarted = false;
+        function startLoadDataOnce() {
+            if (loadDataStarted) return;
+            loadDataStarted = true;
+            loadData();
+        }
+        window.addEventListener('shopify:api-fetch-ready', startLoadDataOnce, { once: true });
+        window.addEventListener('load', startLoadDataOnce, { once: true });
     </script>
 </body>
 </html>

@@ -1,4 +1,5 @@
 const express = require('express');
+const fs = require('fs');
 const session = require('express-session');
 const { createClient } = require('redis');
 const RedisStore = require('connect-redis').default;
@@ -69,6 +70,19 @@ const app = express();
 const isProduction = process.env.NODE_ENV === 'production';
 const publicDir = path.join(process.cwd(), 'public');
 
+function injectShopifyApiKeyMeta(html) {
+  const apiKey = process.env.SHOPIFY_API_KEY || '';
+  const safe = apiKey.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  if (!html.includes('<head>')) return html;
+  return html.replace('<head>', `<head>\n<meta name="shopify-api-key" content="${safe}">\n`);
+}
+
+function sendAppHtmlFile(res, filename) {
+  const filePath = path.join(publicDir, filename);
+  const html = fs.readFileSync(filePath, 'utf8');
+  res.type('html').send(injectShopifyApiKeyMeta(html));
+}
+
 app.set('trust proxy', 1);
 
 // Security middleware
@@ -79,16 +93,6 @@ app.use(helmet({
 
 app.use(cors());
 app.use(cookieParser());
-
-// Shopify embedded app: set frame-ancestors
-app.use((req, res, next) => {
-  const shop = req.query.shop;
-  const frameAncestors = shop
-    ? `https://${shop} https://admin.shopify.com`
-    : 'https://admin.shopify.com https://*.myshopify.com';
-  res.setHeader('Content-Security-Policy', `frame-ancestors ${frameAncestors};`);
-  next();
-});
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -197,7 +201,14 @@ const shopifyAppInstance = shopifyApp({
   api: {
     apiKey: process.env.SHOPIFY_API_KEY || 'dummy_key',
     apiSecretKey: process.env.SHOPIFY_API_SECRET || 'dummy_secret',
-    scopes: ['read_companies', 'write_companies', 'read_customers', 'write_customers', 'read_orders'],
+    scopes: [
+      'read_companies',
+      'write_companies',
+      'read_customers',
+      'write_customers',
+      'read_orders',
+      'read_users',
+    ],
     hostName,
     hostScheme,
     apiVersion: LATEST_API_VERSION,
@@ -220,6 +231,10 @@ const shopifyAppInstance = shopifyApp({
 
 const shopify = shopifyAppInstance.api;
 
+const ensureInstalledOnShop = shopifyAppInstance.ensureInstalledOnShop();
+const validateAuthenticatedSession = shopifyAppInstance.validateAuthenticatedSession();
+const shopifyCspHeaders = shopifyAppInstance.cspHeaders();
+
 app.get(shopifyAppInstance.config.auth.path, shopifyAppInstance.auth.begin());
 app.get(
   shopifyAppInstance.config.auth.callbackPath,
@@ -231,47 +246,24 @@ app.post(
   ...shopifyAppInstance.processWebhooks({ webhookHandlers: {} }),
 );
 
-// Serve static files
-app.use(express.static(publicDir));
+// Routes (before static — do not let express.static answer `/` with public/index.html; we inject App Bridge meta)
+app.get('/test-ui', (req, res) => sendAppHtmlFile(res, 'index.html'));
 
-const loadActiveSession = async (req, res) => {
-  if (res?.locals?.shopify?.session) {
-    return res.locals.shopify.session;
-  }
-  const rawShop = req.query.shop;
-  if (rawShop) {
+app.get(
+  '/',
+  ensureInstalledOnShop,
+  validateAuthenticatedSession,
+  shopifyCspHeaders,
+  (req, res) => {
     try {
-      const shop = shopify.utils.sanitizeShop(rawShop);
-      const offlineId = shopify.session.getOfflineId(shop);
-      const offlineSession = await shopifySessionStorage.loadSession(offlineId);
-      if (offlineSession) return offlineSession;
-    } catch (e) {
-      console.warn('loadActiveSession: offline lookup failed', e.message);
+      const homeHtml = process.env.APP_HOME_HTML || 'simple.html';
+      sendAppHtmlFile(res, homeHtml);
+    } catch (error) {
+      console.error('Error loading app:', error);
+      res.status(500).send('Internal server error');
     }
-  }
-  const sessionId = req.session?.shopSessionId;
-  if (!sessionId) return null;
-  return shopifySessionStorage.loadSession(sessionId);
-};
-
-// Routes
-app.get('/test-ui', (req, res) => res.sendFile(path.join(publicDir, "index.html")));
-
-app.get('/', async (req, res) => {
-  try {
-    const sessionData = await loadActiveSession(req, res);
-    if (!sessionData) {
-      const shop = req.query.shop || req.session.shop;
-      const redirectTarget = shop ? `/auth?shop=${encodeURIComponent(shop)}` : '/auth';
-      return res.redirect(redirectTarget);
-    }
-    const homeHtml = process.env.APP_HOME_HTML || 'simple.html';
-    return res.sendFile(path.join(publicDir, homeHtml));
-  } catch (error) {
-    console.error('Error loading app:', error);
-    return res.status(500).send('Internal server error');
-  }
-});
+  },
+);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -279,7 +271,7 @@ app.get('/api/health', (req, res) => {
 });
 
 const getGraphqlClient = async (req, res) => {
-  const sessionData = await loadActiveSession(req, res);
+  const sessionData = res.locals.shopify?.session;
   if (!sessionData) return null;
   return new shopify.clients.Graphql({ session: sessionData });
 };
@@ -415,7 +407,7 @@ const fetchAllCompanies = async (client) => {
 };
 
 // API Endpoints
-app.get('/api/companies', async (req, res) => {
+app.get('/api/companies', validateAuthenticatedSession, async (req, res) => {
   try {
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
@@ -430,7 +422,7 @@ app.get('/api/companies', async (req, res) => {
   }
 });
 
-app.get('/api/staff', async (req, res) => {
+app.get('/api/staff', validateAuthenticatedSession, async (req, res) => {
   try {
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
@@ -482,7 +474,7 @@ app.get('/api/staff', async (req, res) => {
   }
 });
 
-app.post('/api/assign', async (req, res) => {
+app.post('/api/assign', validateAuthenticatedSession, async (req, res) => {
   try {
     const { staffId, companyLocationId } = req.body;
     const client = await getGraphqlClient(req, res);
@@ -503,7 +495,7 @@ app.post('/api/assign', async (req, res) => {
   }
 });
 
-app.delete('/api/assign', async (req, res) => {
+app.delete('/api/assign', validateAuthenticatedSession, async (req, res) => {
   try {
     const { assignmentId } = req.body;
     const client = await getGraphqlClient(req, res);
@@ -524,7 +516,7 @@ app.delete('/api/assign', async (req, res) => {
   }
 });
 
-app.post('/api/bulk-assign', async (req, res) => {
+app.post('/api/bulk-assign', validateAuthenticatedSession, async (req, res) => {
   try {
     const { staffId, locationCriteria } = req.body;
     const client = await getGraphqlClient(req, res);
@@ -582,7 +574,7 @@ app.post('/api/bulk-assign', async (req, res) => {
   }
 });
 
-app.post('/api/companies-by-location', async (req, res) => {
+app.post('/api/companies-by-location', validateAuthenticatedSession, async (req, res) => {
   try {
     const { locationCriteria } = req.body;
     const client = await getGraphqlClient(req, res);
@@ -625,7 +617,7 @@ app.post('/api/companies-by-location', async (req, res) => {
   }
 });
 
-app.post('/api/companies', async (req, res) => {
+app.post('/api/companies', validateAuthenticatedSession, async (req, res) => {
   try {
     const { companyName, contactFirstName, contactLastName, contactEmail, address } = req.body;
     const client = await getGraphqlClient(req, res);
@@ -672,7 +664,7 @@ app.post('/api/companies', async (req, res) => {
 });
 
 // B2B Sync Route
-app.post('/api/sync-b2b-map', async (req, res) => {
+app.post('/api/sync-b2b-map', validateAuthenticatedSession, async (req, res) => {
   try {
     const { runSync } = require('../lib/sync-b2b-map');
     const stats = await runSync();
@@ -681,6 +673,8 @@ app.post('/api/sync-b2b-map', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+app.use(express.static(publicDir, { index: false }));
 
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
