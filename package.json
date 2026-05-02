@@ -12,6 +12,7 @@
   "dependencies": {
     "@shopify/shopify-api": "^11.14.1",
     "@shopify/shopify-app-express": "^5.0.20",
+    "@shopify/shopify-app-session-storage-redis": "^4.2.13",
     "axios": "^1.6.0",
     "connect-redis": "^7.1.0",
     "connect-sqlite3": "^0.9.13",

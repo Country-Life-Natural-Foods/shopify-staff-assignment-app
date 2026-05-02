@@ -1,5 +1,7 @@
 const express = require('express');
 const session = require('express-session');
+const { createClient } = require('redis');
+const RedisStore = require('connect-redis').default;
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -144,8 +146,29 @@ const memorySessionStorage = {
   },
 };
 
+let shopifySessionStorage = memorySessionStorage;
+let expressSessionStore;
+
+const redisUrl = (process.env.REDIS_URL || '').trim();
+if (redisUrl) {
+  const { RedisSessionStorage } = require('@shopify/shopify-app-session-storage-redis');
+  shopifySessionStorage = new RedisSessionStorage(redisUrl);
+  const redisClient = createClient({ url: redisUrl });
+  redisClient.on('error', (err) => console.error('[redis] express session client', err));
+  redisClient.connect().catch((err) => console.error('[redis] connect failed', err));
+  expressSessionStore = new RedisStore({
+    client: redisClient,
+    prefix: 'staff_app_express:',
+  });
+} else if (isProduction) {
+  console.warn(
+    '[shopify] REDIS_URL is not set. Sessions are in-memory and will not work reliably on Vercel. Add Vercel Redis (or any Redis) and set REDIS_URL.',
+  );
+}
+
 // Express session setup
 app.use(session({
+  store: expressSessionStore,
   secret: process.env.SESSION_SECRET || 'your-session-secret',
   resave: false,
   saveUninitialized: false,
@@ -192,7 +215,7 @@ const shopifyAppInstance = shopifyApp({
   webhooks: {
     path: '/webhooks',
   },
-  sessionStorage: memorySessionStorage,
+  sessionStorage: shopifySessionStorage,
 });
 
 const shopify = shopifyAppInstance.api;
@@ -220,7 +243,7 @@ const loadActiveSession = async (req, res) => {
     try {
       const shop = shopify.utils.sanitizeShop(rawShop);
       const offlineId = shopify.session.getOfflineId(shop);
-      const offlineSession = await memorySessionStorage.loadSession(offlineId);
+      const offlineSession = await shopifySessionStorage.loadSession(offlineId);
       if (offlineSession) return offlineSession;
     } catch (e) {
       console.warn('loadActiveSession: offline lookup failed', e.message);
@@ -228,7 +251,7 @@ const loadActiveSession = async (req, res) => {
   }
   const sessionId = req.session?.shopSessionId;
   if (!sessionId) return null;
-  return memorySessionStorage.loadSession(sessionId);
+  return shopifySessionStorage.loadSession(sessionId);
 };
 
 // Routes
@@ -659,10 +682,10 @@ app.post('/api/sync-b2b-map', async (req, res) => {
   }
 });
 
-// Start server
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 }
 
+// Vercel Node serverless: export the Express app directly (see Vercel Express docs).
 module.exports = app;
