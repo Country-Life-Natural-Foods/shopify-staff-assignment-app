@@ -174,7 +174,7 @@ const shopifyAppInstance = shopifyApp({
   api: {
     apiKey: process.env.SHOPIFY_API_KEY || 'dummy_key',
     apiSecretKey: process.env.SHOPIFY_API_SECRET || 'dummy_secret',
-    scopes: ['read_companies', 'write_companies', 'read_customers', 'write_customers', 'read_users', 'read_orders'],
+    scopes: ['read_companies', 'write_companies', 'read_customers', 'write_customers', 'read_orders'],
     hostName,
     hostScheme,
     apiVersion: LATEST_API_VERSION,
