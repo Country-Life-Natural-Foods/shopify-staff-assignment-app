@@ -161,6 +161,15 @@
     <script>
         let companies = [];
         let staff = [];
+        let staffApiError = null;
+
+        function escapeHtmlText(s) {
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
 
         function apiUrl(path) {
             const params = new URLSearchParams(window.location.search);
@@ -183,6 +192,7 @@
 
         async function loadData() {
             try {
+                staffApiError = null;
                 const fetchOpts = { credentials: 'same-origin' };
                 const [cRes, sRes] = await Promise.all([
                     fetch(apiUrl('/api/companies'), fetchOpts),
@@ -190,16 +200,26 @@
                 ]);
                 const cData = await cRes.json().catch(() => ({}));
                 const sData = await sRes.json().catch(() => ({}));
-                if (!cRes.ok || !sRes.ok) {
-                    const err = cData.error || sData.error || 'Could not load data';
+                if (!cRes.ok) {
+                    const err = escapeHtmlText(cData.error || 'Could not load companies');
+                    const hint = cData.code === 'SHOPIFY_ACCESS_DENIED'
+                        ? ' This usually means the shop needs Shopify Plus for B2B companies, or the app needs reinstall for scopes.'
+                        : '';
                     document.getElementById('performance-content').innerHTML =
-                        `<div class="error">${err}. Try reinstalling the app or contact support.</div>`;
+                        `<div class="error">${err}${hint}</div>`;
                     document.getElementById('companies-content').innerHTML =
                         `<div class="error">${err}</div>`;
+                    companies = [];
+                    staff = [];
                     return;
                 }
                 companies = (cData.edges || []).map(e => e.node);
-                staff = (sData.edges || []).map(e => e.node);
+                if (!sRes.ok) {
+                    staff = [];
+                    staffApiError = sData.error || 'Staff list unavailable';
+                } else {
+                    staff = (sData.edges || []).map(e => e.node);
+                }
                 renderCompanies();
                 renderPerformance();
                 populateSelects();
@@ -236,6 +256,9 @@
 
         function renderPerformance() {
             const container = document.getElementById('performance-content');
+            const staffBanner = staffApiError
+                ? `<div class="error" style="margin-bottom:16px;"><strong>Staff directory:</strong> ${escapeHtmlText(staffApiError)}</div>`
+                : '';
             const totalRev = companies.reduce((s, c) => s + c.performance.totalSpend, 0);
             const totalOrders = companies.reduce((s, c) => s + c.performance.orderCount, 0);
             
@@ -251,7 +274,7 @@
                 });
             });
 
-            container.innerHTML = `
+            container.innerHTML = staffBanner + `
                 <div class="performance-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 30px;">
                     <div class="perf-item"><span class="perf-val" style="font-size: 2em;">$${totalRev.toFixed(2)}</span><span class="perf-label">Total B2B Revenue</span></div>
                     <div class="perf-item"><span class="perf-val" style="font-size: 2em;">${totalOrders}</span><span class="perf-label">Total Orders</span></div>

@@ -9,8 +9,53 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 require('@shopify/shopify-api/adapters/node');
 
-const { Session, LATEST_API_VERSION } = require('@shopify/shopify-api');
+const {
+  Session,
+  LATEST_API_VERSION,
+  GraphqlQueryError,
+  HttpResponseError,
+} = require('@shopify/shopify-api');
 const { shopifyApp } = require('@shopify/shopify-app-express');
+
+function formatShopifyClientError(err) {
+  if (err instanceof GraphqlQueryError) {
+    const gqlErrs = err.body?.errors?.graphQLErrors;
+    if (Array.isArray(gqlErrs) && gqlErrs.length > 0) {
+      return gqlErrs.map((e) => e.message).join('; ');
+    }
+  }
+  if (err instanceof HttpResponseError && err.response?.body && typeof err.response.body === 'object') {
+    try {
+      const b = err.response.body;
+      const gql = b.errors?.graphQLErrors;
+      if (Array.isArray(gql) && gql.length > 0) {
+        return gql.map((e) => e.message).join('; ');
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  return err.message || String(err);
+}
+
+function sendShopifyApiError(res, err) {
+  const message = formatShopifyClientError(err);
+  const lower = message.toLowerCase();
+  const accessDenied =
+    lower.includes('access denied') ||
+    lower.includes('not authorized') ||
+    lower.includes('must be installed on a shopify plus') ||
+    lower.includes('shopify plus') && lower.includes('required') ||
+    lower.includes('advanced') && lower.includes('store') ||
+    /doesn't have a valid/i.test(message) ||
+    (lower.includes('permission') && lower.includes('required'));
+
+  const status = accessDenied ? 403 : 502;
+  res.status(status).json({
+    error: message,
+    code: accessDenied ? 'SHOPIFY_ACCESS_DENIED' : 'SHOPIFY_API_ERROR',
+  });
+}
 
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production';
@@ -351,6 +396,10 @@ app.get('/api/companies', async (req, res) => {
     const companies = await fetchAllCompanies(client);
     res.json({ edges: companies.map(c => ({ node: c })) });
   } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/companies', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -399,6 +448,10 @@ app.get('/api/staff', async (req, res) => {
       pageInfo: { hasNextPage: false }
     });
   } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/staff', error);
     res.status(500).json({ error: error.message });
   }
 });
