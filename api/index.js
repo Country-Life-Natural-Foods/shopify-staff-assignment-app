@@ -16,7 +16,12 @@ const {
   HttpResponseError,
 } = require('@shopify/shopify-api');
 const { shopifyApp } = require('@shopify/shopify-app-express');
-const { resolveShopifyHostName } = require('../lib/resolve-shopify-hostname');
+const {
+  applyShopifyDeploymentEnv,
+  resolveShopifyHostName,
+} = require('../lib/resolve-shopify-hostname');
+
+applyShopifyDeploymentEnv();
 
 function formatShopifyClientError(err) {
   if (err instanceof GraphqlQueryError) {
@@ -155,7 +160,7 @@ app.use(session({
 const hostName = resolveShopifyHostName();
 if (!hostName) {
   throw new Error(
-    'Shopify API: hostName is empty in production. Set SHOPIFY_APP_URL (e.g. https://your-app.vercel.app) or SHOPIFY_HOSTNAME (hostname only). On Vercel, VERCEL_URL / VERCEL_PROJECT_PRODUCTION_URL are normally injected — confirm Environment Variables are available to this deployment.',
+    'Shopify API: hostName is empty in production. Set SHOPIFY_APP_URL to your deployed origin (https://your-app.vercel.app) — required for hosted apps per Shopify deployment docs — or set SHOPIFY_HOSTNAME. Vercel: also set VERCEL_URL-backed preview or use SHOPIFY_APP_URL explicitly.',
   );
 }
 
@@ -237,7 +242,8 @@ app.get('/', async (req, res) => {
       const redirectTarget = shop ? `/auth?shop=${encodeURIComponent(shop)}` : '/auth';
       return res.redirect(redirectTarget);
     }
-    return res.sendFile(path.join(publicDir, 'index.html'));
+    const homeHtml = process.env.APP_HOME_HTML || 'simple.html';
+    return res.sendFile(path.join(publicDir, homeHtml));
   } catch (error) {
     console.error('Error loading app:', error);
     return res.status(500).send('Internal server error');
