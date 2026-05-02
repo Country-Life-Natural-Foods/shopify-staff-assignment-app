@@ -277,8 +277,13 @@ const getGraphqlClient = async (req, res) => {
 };
 
 const throwIfGraphqlErrors = (response, label) => {
-  const errs = response.body?.errors;
-  if (errs?.length) {
+  const body = response?.body;
+  const gql = body?.errors?.graphQLErrors;
+  if (Array.isArray(gql) && gql.length > 0) {
+    throw new Error(`${label}: ${gql.map((e) => e.message).join('; ')}`);
+  }
+  const errs = body?.errors;
+  if (Array.isArray(errs) && errs.length) {
     throw new Error(`${label}: ${errs.map((e) => e.message).join('; ')}`);
   }
 };
@@ -345,13 +350,17 @@ const fetchAllCompanies = async (client) => {
     throwIfGraphqlErrors(response, 'companies');
     const companiesData = response.body?.data?.companies;
     if (!companiesData) {
-      throw new Error('companies: empty data');
+      break;
     }
-    const { edges, pageInfo } = companiesData;
+    const edges = companiesData.edges || [];
+    const pageInfo = companiesData.pageInfo || { hasNextPage: false, endCursor: null };
 
     // For each company, fetch orders to calculate performance
     for (const edge of edges) {
       const company = edge.node;
+      if (company.locations == null) {
+        company.locations = { edges: [] };
+      }
 
       let totalSpend = 0;
       let orderCount = 0;
@@ -383,7 +392,10 @@ const fetchAllCompanies = async (client) => {
         throwIfGraphqlErrors(ordersResponse, 'orders');
         const orderEdges = ordersResponse.body?.data?.orders?.edges;
         const orders = orderEdges ? orderEdges.map((e) => e.node) : [];
-        totalSpend = orders.reduce((sum, order) => sum + parseFloat(order.totalPriceSet.shopMoney.amount), 0);
+        totalSpend = orders.reduce((sum, order) => {
+          const amt = order?.totalPriceSet?.shopMoney?.amount;
+          return sum + (amt != null ? parseFloat(amt) : 0);
+        }, 0);
         orderCount = orders.length;
         lastOrderDate = orders.length > 0 ? orders[0].createdAt : null;
       } catch (orderErr) {
@@ -400,8 +412,8 @@ const fetchAllCompanies = async (client) => {
       all.push(company);
     }
 
-    hasNextPage = pageInfo.hasNextPage;
-    cursor = pageInfo.endCursor;
+    hasNextPage = Boolean(pageInfo.hasNextPage);
+    cursor = pageInfo.endCursor || null;
   }
   return all;
 };
@@ -455,11 +467,13 @@ app.get('/api/staff', validateAuthenticatedSession, async (req, res) => {
       throwIfGraphqlErrors(response, 'staffMembers');
       const staffData = response.body?.data?.staffMembers;
       if (!staffData) {
-        throw new Error('staffMembers: empty data');
+        hasNextPage = false;
+        break;
       }
-      allStaff = allStaff.concat(staffData.edges.map((edge) => edge.node));
-      hasNextPage = staffData.pageInfo.hasNextPage;
-      cursor = staffData.pageInfo.endCursor;
+      const se = staffData.edges || [];
+      allStaff = allStaff.concat(se.map((edge) => edge.node));
+      hasNextPage = Boolean(staffData.pageInfo?.hasNextPage);
+      cursor = staffData.pageInfo?.endCursor ?? null;
     }
     res.json({
       edges: allStaff.map((node) => ({ node })),

@@ -232,24 +232,27 @@
             const container = document.getElementById('companies-content');
             if (!companies.length) { container.innerHTML = 'No companies found.'; return; }
             container.innerHTML = companies.map(c => {
-                const reps = c.locations.edges[0]?.node.staffMemberAssignments?.edges.map(e => `<span class="rep-badge">${e.node.staffMember.firstName}</span>`).join('') || '<span style="color:#999; font-size:0.8em;">Unassigned</span>';
+                const locEdges = c.locations?.edges || [];
+                const reps = locEdges[0]?.node.staffMemberAssignments?.edges.map(e => `<span class="rep-badge">${e.node.staffMember.firstName}</span>`).join('') || '<span style="color:#999; font-size:0.8em;">Unassigned</span>';
+                const addr = locEdges[0]?.node?.shippingAddress;
+                const cityLine = addr ? `${addr.city || ''}, ${addr.province || ''}` : '';
                 return `
                     <div class="list-item">
                         <div style="display:flex; justify-content:space-between; align-items:start;">
                             <div>
                                 <h3>${c.name}</h3>
-                                <p style="font-size:0.9em; color:#666;">${c.locations.edges[0]?.node.shippingAddress.city}, ${c.locations.edges[0]?.node.shippingAddress.province}</p>
+                                <p style="font-size:0.9em; color:#666;">${cityLine}</p>
                                 <div style="margin-top:5px;">${reps}</div>
                             </div>
                             <div style="text-align:right;">
-                                <span style="font-weight:bold; color:#2ecc71; font-size:1.2em;">$${c.performance.totalSpend.toFixed(2)}</span>
+                                <span style="font-weight:bold; color:#2ecc71; font-size:1.2em;">$${(c.performance?.totalSpend ?? 0).toFixed(2)}</span>
                                 <div style="font-size:0.7em; color:#999; text-transform:uppercase;">Revenue</div>
                             </div>
                         </div>
                         <div class="performance-grid">
-                            <div class="perf-item"><span class="perf-val">${c.performance.orderCount}</span><span class="perf-label">Orders</span></div>
-                            <div class="perf-item"><span class="perf-val">$${c.performance.avgOrderValue.toFixed(2)}</span><span class="perf-label">AOV</span></div>
-                            <div class="perf-item"><span class="perf-val">${c.performance.lastOrderDate ? new Date(c.performance.lastOrderDate).toLocaleDateString() : 'Never'}</span><span class="perf-label">Last Order</span></div>
+                            <div class="perf-item"><span class="perf-val">${c.performance?.orderCount ?? 0}</span><span class="perf-label">Orders</span></div>
+                            <div class="perf-item"><span class="perf-val">$${(c.performance?.avgOrderValue ?? 0).toFixed(2)}</span><span class="perf-label">AOV</span></div>
+                            <div class="perf-item"><span class="perf-val">${c.performance?.lastOrderDate ? new Date(c.performance.lastOrderDate).toLocaleDateString() : 'Never'}</span><span class="perf-label">Last Order</span></div>
                         </div>
                     </div>
                 `;
@@ -261,17 +264,21 @@
             const staffBanner = staffApiError
                 ? `<div class="error" style="margin-bottom:16px;"><strong>Staff directory:</strong> ${escapeHtmlText(staffApiError)}</div>`
                 : '';
-            const totalRev = companies.reduce((s, c) => s + c.performance.totalSpend, 0);
-            const totalOrders = companies.reduce((s, c) => s + c.performance.orderCount, 0);
+            const totalRev = companies.reduce((s, c) => s + (c.performance?.totalSpend ?? 0), 0);
+            const totalOrders = companies.reduce((s, c) => s + (c.performance?.orderCount ?? 0), 0);
             
             // Calculate rep performance
             const repPerformance = {};
             companies.forEach(c => {
-                c.locations.edges.forEach(l => {
-                    l.node.staffMemberAssignments.edges.forEach(a => {
-                        const name = `${a.node.staffMember.firstName} ${a.node.staffMember.lastName}`;
+                const spend = c.performance?.totalSpend ?? 0;
+                (c.locations?.edges || []).forEach(l => {
+                    const assigns = l.node?.staffMemberAssignments?.edges || [];
+                    assigns.forEach(a => {
+                        const sm = a.node?.staffMember;
+                        const name = sm ? `${sm.firstName} ${sm.lastName}` : '';
+                        if (!name) return;
                         if (!repPerformance[name]) repPerformance[name] = 0;
-                        repPerformance[name] += c.performance.totalSpend;
+                        repPerformance[name] += spend;
                     });
                 });
             });
@@ -287,10 +294,10 @@
                     <div>
                         <h3>🏆 Top Companies</h3>
                         <div style="margin-top:15px; background:#f9f9f9; border-radius:8px; padding:10px;">
-                            ${[...companies].sort((a,b) => b.performance.totalSpend - a.performance.totalSpend).slice(0, 5).map(c => `
+                            ${[...companies].sort((a,b) => (b.performance?.totalSpend ?? 0) - (a.performance?.totalSpend ?? 0)).slice(0, 5).map(c => `
                                 <div style="display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid #eee;">
                                     <span>${c.name}</span>
-                                    <span style="font-weight: bold; color:#2ecc71;">$${c.performance.totalSpend.toFixed(2)}</span>
+                                    <span style="font-weight: bold; color:#2ecc71;">$${(c.performance?.totalSpend ?? 0).toFixed(2)}</span>
                                 </div>
                             `).join('')}
                         </div>
@@ -315,7 +322,7 @@
             document.getElementById('staff-select').innerHTML = sHtml;
             document.getElementById('bulk-staff-select').innerHTML = sHtml;
             
-            const lHtml = companies.flatMap(c => c.locations.edges.map(e => `<option value="${e.node.id}">${c.name} - ${e.node.name}</option>`)).join('');
+            const lHtml = companies.flatMap(c => (c.locations?.edges || []).map(e => `<option value="${e.node.id}">${c.name} - ${e.node.name}</option>`)).join('');
             document.getElementById('location-select').innerHTML = lHtml;
         }
 
