@@ -56,7 +56,7 @@ app.use(session({
 const shopify = shopifyApi({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET,
-  scopes: ['read_companies', 'write_companies', 'read_customers', 'write_customers', 'read_users'],
+  scopes: ['read_companies', 'write_companies', 'read_customers', 'write_customers'],
   hostName: process.env.SHOPIFY_APP_URL?.replace(/https?:\/\//, '') || 'localhost:3000',
   apiVersion: LATEST_API_VERSION,
   isEmbeddedApp: true,
