@@ -106,10 +106,15 @@ app.use(session({
   },
 }));
 
+const vercelHost = process.env.VERCEL_URL
+  ? process.env.VERCEL_URL.replace(/^https?:\/\//, '').replace(/\/$/, '')
+  : '';
+
 const hostName =
   process.env.SHOPIFY_HOSTNAME ||
   process.env.HOST?.replace(/^https?:\/\//, '') ||
   process.env.SHOPIFY_APP_URL?.replace(/^https?:\/\//, '') ||
+  vercelHost ||
   'localhost';
 
 const hostScheme =
