@@ -1,147 +1,62 @@
-# Shopify Staff Assignment App
+# Shopify B2B Map Sync App
 
-A complete Shopify app for managing staff assignments to company locations, deployed on Vercel.
+A specialized Shopify application deployed on Vercel that automatically synchronizes B2B company locations to a Store Locator Map. It fetches company addresses, geocodes them via Mapbox, and creates/updates `b2b_map_location` metaobjects in your Shopify store.
 
-## 🚀 Quick Start
+## 🚀 Key Features
 
-### 1. Install Dependencies
-```bash
-npm install
-```
+- **Automated Geocoding**: Converts B2B company addresses into precise coordinates (latitude/longitude) using Mapbox API.
+- **Metaobject Sync**: Automatically creates and updates `b2b_map_location` metaobjects used by Shopify Storefronts for locator maps.
+- **Interactive Dashboard**: A clean, intuitive admin interface to view all synced locations on an interactive map.
+- **Manual Trigger**: Instantly trigger a sync process directly from the app dashboard.
+- **Scheduled Sync**: Supports automated daily syncs via cron.
 
-### 2. Configure Environment
-Create a `.env` file with your app credentials:
+## 🛠️ Setup & Configuration
 
-```env
-# Your app's API key and secret from Partner Dashboard
-SHOPIFY_API_KEY=your_api_key_here
-SHOPIFY_API_SECRET=your_api_secret_here
+For full setup instructions including Shopify app configuration, metaobject definitions, and environment variables, please refer to the primary guide:
 
-# Your app's URL (use ngrok for local development)
-SHOPIFY_APP_URL=https://your-app-url.ngrok.io
+👉 **[B2B Map Sync Documentation](./B2B_MAP_SYNC.md)**
 
-# Session secret (generate a random string)
-SESSION_SECRET=your_session_secret_here
-```
+### Quick Start (Local Development)
 
-### 3. Start Development Server
-```bash
-npm run dev
-```
-
-### 4. Install App in Shopify Store
-1. Go to your Partner Dashboard
-2. Create a new app or use existing one
-3. Set the app URL to your ngrok URL
-4. Install the app in your development store
-
-## 📱 App Features
-
-- **Staff Management**: View and manage all staff members
-- **Company Management**: View and manage company locations
-- **Assignment Management**: Assign/remove staff from companies
-- **Interactive Interface**: User-friendly web interface
-- **Real-time Updates**: Live data from Shopify Admin API
-
-## 🛠️ Development
-
-### Local Development Setup
-
-1. **Install ngrok** for local tunneling:
-   ```bash
-   npm install -g ngrok
+1. **Install Dependencies**
+   ```
+   npm install
    ```
 
-2. **Start ngrok**:
-   ```bash
-   ngrok http 3000
+2. **Configure Environment**
+   Create a `.env` file based on `.env.example`. You will need:
+   - `SHOPIFY_SHOP_DOMAIN`
+   - `SHOPIFY_CLIENT_ID` & `SHOPIFY_CLIENT_SECRET` (or `SHOPIFY_ADMIN_ACCESS_TOKEN` for legacy custom apps)
+   - `MAPBOX_ACCESS_TOKEN`
+   - `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL` (for the Express App framework)
+
+3. **Start Development Server**
+   ```
+   npm run dev &
    ```
 
-3. **Update your app URL** in Partner Dashboard to the ngrok URL
+## 📱 App Dashboard
 
-4. **Start the app**:
-   ```bash
-   npm run dev
-   ```
-
-### API Endpoints
-
-- `GET /` - App home page
-- `GET /auth` - OAuth authentication
-- `GET /auth/callback` - OAuth callback
-- `GET /api/companies` - List companies with locations and staff assignments
-- `GET /api/staff` - List staff members
-- `POST /api/assign` - Assign staff to company location
-- `DELETE /api/assign` - Remove staff from company location
-- `POST /api/bulk-assign` - Bulk assign staff to company locations by location criteria
-- `POST /api/companies-by-location` - Filter company locations by location criteria
-
-## 🔧 Configuration
-
-### Required App Scopes
-
-Your Shopify app needs these scopes:
-- `read_companies`
-- `write_companies`
-
-### App Settings
-
-Configure these in your Partner Dashboard:
-- **App URL**: Your app's main URL
-- **Allowed redirection URLs**: `{APP_URL}/auth/callback`
-- **Webhook endpoints**: Configure as needed
+The app provides an embedded dashboard in the Shopify Admin that displays:
+1. **Summary Statistics**: Total locations, synced coordinates, and missing coordinates.
+2. **Location Directory**: A searchable list of all B2B locations fetched from Shopify.
+3. **Interactive Map**: A Mapbox-powered visualization of all successfully geocoded locations.
 
 ## 📦 Deployment to Vercel
 
-### Deploy to Production
+This app is configured for seamless deployment to Vercel as a Serverless function.
 
-1. **Push your code to GitHub**
+See the detailed guide: **[VERCEL_DEPLOYMENT.md](./VERCEL_DEPLOYMENT.md)**
 
-2. **Connect to Vercel**:
-   - Go to [vercel.com](https://vercel.com)
-   - Import your GitHub repository
-   - Vercel will auto-detect it's a Node.js app
+## 🛡️ Security & Architecture
 
-3. **Configure Environment Variables** in Vercel dashboard:
-   ```
-   SHOPIFY_API_KEY=your_production_api_key
-   SHOPIFY_API_SECRET=your_production_api_secret
-   SHOPIFY_APP_URL=https://your-app-name.vercel.app
-   SESSION_SECRET=your_strong_session_secret
-   NODE_ENV=production
-   ```
-
-4. **Deploy**:
-   ```bash
-   npm run deploy
-   ```
-
-### Environment Variables
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `SHOPIFY_API_KEY` | Your app's API key | Yes |
-| `SHOPIFY_API_SECRET` | Your app's API secret | Yes |
-| `SHOPIFY_APP_URL` | Your app's URL | Yes |
-| `SESSION_SECRET` | Session encryption secret | Yes |
-
-## 🛡️ Security
-
-- OAuth 2.0 authentication with Shopify
-- Secure session management
-- CSRF protection
-- Input validation and sanitization
-- Rate limiting for API requests
+- **Session Management**: Uses standard Shopify OAuth and session tokens via `@shopify/shopify-app-express`.
+- **Database**: SQLite is used locally for session storage. For production on Vercel, it is recommended to switch to Redis or another durable store.
+- **Background Jobs**: The `runSync` logic in `lib/sync-b2b-map.js` handles API pagination and rate-limiting gracefully.
 
 ## 📞 Support
 
-For issues or questions:
-1. Check the troubleshooting section
-2. Review Shopify app development documentation
-3. Check your app's logs for errors
-
-## 📚 Additional Documentation
-
-- [VERCEL_DEPLOYMENT.md](./VERCEL_DEPLOYMENT.md) - Detailed Vercel deployment guide
-- [SETUP_GUIDE.md](./SETUP_GUIDE.md) - Complete setup instructions
-- [QUICK_START.md](./QUICK_START.md) - 5-minute quick start guide
+If you encounter issues:
+1. Ensure the `b2b_map_location` metaobject definition exists in your Shopify Admin.
+2. Verify your `MAPBOX_ACCESS_TOKEN` has the necessary geocoding scopes.
+3. Check the Vercel logs or local console for specific API errors.
