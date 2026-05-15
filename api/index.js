@@ -207,7 +207,6 @@ const shopifyAppInstance = shopifyApp({
       'read_customers',
       'write_customers',
       'read_orders',
-      'read_users',
     ],
     hostName,
     hostScheme,
