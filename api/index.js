@@ -434,20 +434,22 @@ app.get('/api/companies', validateAuthenticatedSession, async (req, res) => {
   }
 });
 
-app.get('/api/staff', validateAuthenticatedSession, async (req, res) => {
+app.get('/api/locations', validateAuthenticatedSession, async (req, res) => {
   try {
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
     const query = `
-      query getStaff($first: Int!, $after: String) {
-        staffMembers(first: $first, after: $after) {
+      query getMetaobjects($first: Int!, $after: String) {
+        metaobjects(type: "b2b_map_location", first: $first, after: $after) {
           edges {
             node {
               id
-              firstName
-              lastName
-              email
+              handle
+              fields {
+                key
+                value
+              }
             }
           }
           pageInfo {
@@ -457,222 +459,33 @@ app.get('/api/staff', validateAuthenticatedSession, async (req, res) => {
         }
       }
     `;
-    let allStaff = [];
+    let allLocations = [];
     let hasNextPage = true;
     let cursor = null;
     while (hasNextPage) {
       const response = await client.query({
-        data: { query, variables: { first: 50, after: cursor } },
+        data: { query, variables: { first: 100, after: cursor } },
       });
-      throwIfGraphqlErrors(response, 'staffMembers');
-      const staffData = response.body?.data?.staffMembers;
-      if (!staffData) {
+      throwIfGraphqlErrors(response, 'metaobjects');
+      const moData = response.body?.data?.metaobjects;
+      if (!moData) {
         hasNextPage = false;
         break;
       }
-      const se = staffData.edges || [];
-      allStaff = allStaff.concat(se.map((edge) => edge.node));
-      hasNextPage = Boolean(staffData.pageInfo?.hasNextPage);
-      cursor = staffData.pageInfo?.endCursor ?? null;
+      const edges = moData.edges || [];
+      allLocations = allLocations.concat(edges.map((edge) => edge.node));
+      hasNextPage = Boolean(moData.pageInfo?.hasNextPage);
+      cursor = moData.pageInfo?.endCursor ?? null;
     }
     res.json({
-      edges: allStaff.map((node) => ({ node })),
+      edges: allLocations.map((node) => ({ node })),
       pageInfo: { hasNextPage: false }
     });
   } catch (error) {
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
       return sendShopifyApiError(res, error);
     }
-    console.error('GET /api/staff', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/assign', validateAuthenticatedSession, async (req, res) => {
-  try {
-    const { staffId, companyLocationId } = req.body;
-    const client = await getGraphqlClient(req, res);
-    const mutation = `
-      mutation companyLocationAssignStaffMembers($companyLocationId: ID!, $staffMemberIds: [ID!]!) {
-        companyLocationAssignStaffMembers(companyLocationId: $companyLocationId, staffMemberIds: $staffMemberIds) {
-          companyLocationStaffMemberAssignments { id }
-          userErrors { message }
-        }
-      }
-    `;
-    const response = await client.query({
-      data: { query: mutation, variables: { companyLocationId, staffMemberIds: [staffId] } },
-    });
-    res.json(response.body.data.companyLocationAssignStaffMembers);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/assign', validateAuthenticatedSession, async (req, res) => {
-  try {
-    const { assignmentId } = req.body;
-    const client = await getGraphqlClient(req, res);
-    const mutation = `
-      mutation companyLocationRemoveStaffMembers($companyLocationStaffMemberAssignmentIds: [ID!]!) {
-        companyLocationRemoveStaffMembers(companyLocationStaffMemberAssignmentIds: $companyLocationStaffMemberAssignmentIds) {
-          deletedCompanyLocationStaffMemberAssignmentIds
-          userErrors { message }
-        }
-      }
-    `;
-    const response = await client.query({
-      data: { query: mutation, variables: { companyLocationStaffMemberAssignmentIds: [assignmentId] } },
-    });
-    res.json(response.body.data.companyLocationRemoveStaffMembers);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/bulk-assign', validateAuthenticatedSession, async (req, res) => {
-  try {
-    const { staffId, locationCriteria } = req.body;
-    const client = await getGraphqlClient(req, res);
-    const companies = await fetchAllCompanies(client);
-    const filteredLocations = [];
-
-    companies.forEach((company) => {
-      company.locations?.edges?.forEach((locationEdge) => {
-        const location = locationEdge.node;
-        const address = location.shippingAddress;
-        if (!address) return;
-
-        let matches = false;
-        if (locationCriteria.state && address.province) {
-          matches = address.province.toLowerCase().includes(locationCriteria.state.toLowerCase());
-        }
-        if (locationCriteria.city && address.city) {
-          matches = matches || address.city.toLowerCase().includes(locationCriteria.city.toLowerCase());
-        }
-        if (locationCriteria.zip && address.zip) {
-          matches = matches || address.zip.includes(locationCriteria.zip);
-        }
-        if (locationCriteria.country && address.country) {
-          matches = matches || address.country.toLowerCase().includes(locationCriteria.country.toLowerCase());
-        }
-
-        if (matches) {
-          filteredLocations.push({ id: location.id });
-        }
-      });
-    });
-
-    const mutation = `
-      mutation companyLocationAssignStaffMembers($companyLocationId: ID!, $staffMemberIds: [ID!]!) {
-        companyLocationAssignStaffMembers(companyLocationId: $companyLocationId, staffMemberIds: $staffMemberIds) {
-          companyLocationStaffMemberAssignments { id }
-          userErrors { message }
-        }
-      }
-    `;
-
-    let successCount = 0;
-    for (const location of filteredLocations) {
-      const response = await client.query({
-        data: { query: mutation, variables: { companyLocationId: location.id, staffMemberIds: [staffId] } },
-      });
-      if (response.body.data.companyLocationAssignStaffMembers.userErrors.length === 0) {
-        successCount++;
-      }
-    }
-
-    res.json({ success: true, assigned: successCount, total: filteredLocations.length });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/companies-by-location', validateAuthenticatedSession, async (req, res) => {
-  try {
-    const { locationCriteria } = req.body;
-    const client = await getGraphqlClient(req, res);
-    const companies = await fetchAllCompanies(client);
-    const filteredLocations = [];
-
-    companies.forEach((company) => {
-      company.locations?.edges?.forEach((locationEdge) => {
-        const location = locationEdge.node;
-        const address = location.shippingAddress;
-        if (!address) return;
-
-        let matches = false;
-        if (locationCriteria.state && address.province) {
-          matches = address.province.toLowerCase().includes(locationCriteria.state.toLowerCase());
-        }
-        if (locationCriteria.city && address.city) {
-          matches = matches || address.city.toLowerCase().includes(locationCriteria.city.toLowerCase());
-        }
-        if (locationCriteria.zip && address.zip) {
-          matches = matches || address.zip.includes(locationCriteria.zip);
-        }
-        if (locationCriteria.country && address.country) {
-          matches = matches || address.country.toLowerCase().includes(locationCriteria.country.toLowerCase());
-        }
-
-        if (matches) {
-          filteredLocations.push({
-            ...location,
-            companyName: company.name,
-            companyId: company.id,
-          });
-        }
-      });
-    });
-
-    res.json({ locations: filteredLocations, total: filteredLocations.length });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/companies', validateAuthenticatedSession, async (req, res) => {
-  try {
-    const { companyName, contactFirstName, contactLastName, contactEmail, address } = req.body;
-    const client = await getGraphqlClient(req, res);
-
-    const mutation = `
-      mutation companyCreate($input: CompanyCreateInput!) {
-        companyCreate(input: $input) {
-          company {
-            id
-            name
-          }
-          userErrors {
-            field
-            message
-          }
-        }
-      }
-    `;
-
-    const variables = {
-      input: {
-        company: { name: companyName },
-        companyLocation: {
-          name: "Main Location",
-          shippingAddress: address,
-          billingAddress: address
-        },
-        companyContact: {
-          firstName: contactFirstName,
-          lastName: contactLastName,
-          email: contactEmail
-        }
-      }
-    };
-
-    const response = await client.query({
-      data: { query: mutation, variables },
-    });
-
-    res.json(response.body.data.companyCreate);
-  } catch (error) {
+    console.error('GET /api/locations', error);
     res.status(500).json({ error: error.message });
   }
 });
