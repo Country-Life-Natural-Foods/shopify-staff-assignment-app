@@ -88,7 +88,7 @@ app.set('trust proxy', 1);
 // Security middleware
 app.use(helmet({
   contentSecurityPolicy: false,
-  frameGuard: false,
+  frameguard: false,
 }));
 
 app.use(cors());
