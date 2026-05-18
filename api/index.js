@@ -248,6 +248,51 @@ app.post(
 // Routes (before static — do not let express.static answer `/` with public/index.html; we inject App Bridge meta)
 app.get('/test-ui', (req, res) => sendAppHtmlFile(res, 'index.html'));
 
+app.get('/exitiframe', (req, res) => {
+  const redirectUri = req.query.redirectUri;
+  if (!redirectUri) {
+    return res.status(400).send('No redirectUri provided');
+  }
+
+  const safeRedirectUri = decodeURIComponent(redirectUri);
+
+  try {
+    const url = new URL(safeRedirectUri);
+    const hostname = url.hostname;
+    const isShopify = hostname.endsWith('.myshopify.com') || hostname === 'admin.shopify.com';
+    const isSelf = hostname === req.hostname;
+
+    if (!isShopify && !isSelf) {
+      return res.status(400).send('Invalid redirectUri: domain not allowed.');
+    }
+  } catch (err) {
+    return res.status(400).send('Invalid redirectUri format.');
+  }
+
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <title>Redirecting...</title>
+      <script>
+        document.addEventListener("DOMContentLoaded", function() {
+          const redirectUri = ${JSON.stringify(safeRedirectUri)};
+          if (window.top !== window.self) {
+            window.top.location.href = redirectUri;
+          } else {
+            window.location.href = redirectUri;
+          }
+        });
+      </script>
+    </head>
+    <body>
+      <p>Redirecting to Shopify authentication...</p>
+    </body>
+    </html>
+  `);
+});
+
 app.get(
   '/',
   ensureInstalledOnShop,
