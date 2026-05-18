@@ -27,7 +27,7 @@
     "sqlite3": "^5.1.7"
   },
   "devDependencies": {
-    "vercel": "^32.0.0"
+    "vercel": "^54.1.0"
   },
   "keywords": [
     "shopify",

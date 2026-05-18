@@ -1,0 +1,3 @@
+# Ignore local server and SQLite files in Vercel deployments
+server.js
+sessions.sqlite
