@@ -261,17 +261,22 @@ app.get('/exitiframe', (req, res) => {
 
   const safeRedirectUri = decodeURIComponent(redirectUri);
 
+  let url;
   try {
-    const url = new URL(safeRedirectUri);
-    const hostname = url.hostname;
-    const isShopify = hostname.endsWith('.myshopify.com') || hostname === 'admin.shopify.com';
-    const isSelf = hostname === req.hostname;
-
-    if (!isShopify && !isSelf) {
-      return res.status(400).send('Invalid redirectUri: domain not allowed.');
-    }
+    // Support both absolute URLs and relative paths by using the request's origin as fallback base
+    url = new URL(safeRedirectUri, `${req.protocol}://${req.get('host')}`);
   } catch (err) {
-    return res.status(400).send('Invalid redirectUri format.');
+    console.error('[exitiframe] Failed to parse redirectUri:', safeRedirectUri, err);
+    return res.status(400).send(`Invalid redirectUri format: "${safeRedirectUri}"`);
+  }
+
+  const hostname = url.hostname;
+  const isShopify = hostname.endsWith('.myshopify.com') || hostname === 'admin.shopify.com';
+  const isSelf = hostname === req.hostname || hostname === 'localhost';
+
+  if (!isShopify && !isSelf) {
+    console.warn('[exitiframe] Domain not allowed:', hostname);
+    return res.status(400).send(`Invalid redirectUri: domain "${hostname}" is not allowed.`);
   }
 
   res.send(`
