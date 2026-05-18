@@ -10,6 +10,11 @@ const path = require('path');
 
 // Load environment variables
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+if (process.env.SHOPIFY_API_KEY) process.env.SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY.trim();
+if (process.env.SHOPIFY_API_SECRET) process.env.SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET.trim();
+if (process.env.SHOPIFY_APP_URL) process.env.SHOPIFY_APP_URL = process.env.SHOPIFY_APP_URL.trim();
+if (process.env.SESSION_SECRET) process.env.SESSION_SECRET = process.env.SESSION_SECRET.trim();
+
 require('@shopify/shopify-api/adapters/node');
 
 const {
