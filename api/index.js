@@ -411,8 +411,21 @@ const fetchAllCompanies = async (client) => {
     const edges = companiesData.edges || [];
     const pageInfo = companiesData.pageInfo || { hasNextPage: false, endCursor: null };
 
-    // For each company, fetch orders to calculate performance
-    for (const edge of edges) {
+    const ordersQuery = `
+      query getCompanyOrders($query: String!) {
+        orders(first: 100, query: $query) {
+          edges {
+            node {
+              totalPriceSet { shopMoney { amount } }
+              createdAt
+            }
+          }
+        }
+      }
+    `;
+
+    // Fetch orders for all companies on this page concurrently
+    await Promise.all(edges.map(async (edge) => {
       const company = edge.node;
       if (company.locations == null) {
         company.locations = { edges: [] };
@@ -422,23 +435,6 @@ const fetchAllCompanies = async (client) => {
       let orderCount = 0;
       let lastOrderDate = null;
       try {
-        const ordersQuery = `
-        query getCompanyOrders($query: String!) {
-          orders(first: 100, query: $query) {
-            edges {
-              node {
-                totalPriceSet {
-                  shopMoney {
-                    amount
-                  }
-                }
-                createdAt
-              }
-            }
-          }
-        }
-      `;
-
         const ordersResponse = await client.query({
           data: {
             query: ordersQuery,
@@ -466,7 +462,7 @@ const fetchAllCompanies = async (client) => {
       };
 
       all.push(company);
-    }
+    }));
 
     hasNextPage = Boolean(pageInfo.hasNextPage);
     cursor = pageInfo.endCursor || null;
@@ -549,8 +545,12 @@ app.get('/api/locations', validateAuthenticatedSession, async (req, res) => {
 // B2B Sync Route
 app.post('/api/sync-b2b-map', validateAuthenticatedSession, async (req, res) => {
   try {
+    const sessionData = res.locals.shopify?.session;
     const { runSync } = require('../lib/sync-b2b-map');
-    const stats = await runSync();
+    const stats = await runSync({
+      shop: sessionData?.shop,
+      token: sessionData?.accessToken,
+    });
     res.json({ success: true, ...stats });
   } catch (err) {
     res.status(500).json({ error: err.message });

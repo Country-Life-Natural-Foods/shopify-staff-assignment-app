@@ -198,7 +198,8 @@
         list.innerHTML = filtered.map(l => {
             const hasCoords = l.latitude && l.longitude;
             return `
-                <div class="p-3 hover:bg-zinc-50 rounded-lg cursor-pointer transition-colors border-b border-zinc-100 last:border-0" onclick="flyToLocation(${l.latitude || 0}, ${l.longitude || 0})">
+                <div class="p-3 rounded-lg transition-colors border-b border-zinc-100 last:border-0 ${hasCoords ? 'hover:bg-zinc-50 cursor-pointer' : 'opacity-60'}"
+                    ${hasCoords ? `onclick="flyToLocation(${l.latitude}, ${l.longitude})"` : ''}>
                     <div class="flex justify-between items-start">
                         <div>
                             <h4 class="font-semibold text-sm text-zinc-900">${l.business_name || 'Unnamed Location'}</h4>
@@ -218,8 +219,6 @@
     function initMap() {
         if (!MAPBOX_TOKEN) return;
 
-        document.getElementById('map-placeholder').style.display = 'none';
-
         try {
             mapboxgl.accessToken = MAPBOX_TOKEN;
             map = new mapboxgl.Map({
@@ -232,11 +231,11 @@
             map.addControl(new mapboxgl.NavigationControl());
 
             map.on('load', () => {
+                document.getElementById('map-placeholder').style.display = 'none';
                 updateMarkers();
             });
         } catch (e) {
             console.error('Mapbox init error:', e);
-            document.getElementById('map-placeholder').style.display = 'flex';
         }
     }
 
