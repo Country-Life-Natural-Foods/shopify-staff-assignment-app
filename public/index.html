@@ -121,10 +121,7 @@
     let map;
     let markers = [];
 
-    // NOTE: In a real app, you'd fetch this from the backend safely, or inject it.
-    // For this demo, we'll try to initialize without it, and fail gracefully.
-    // Replace with your actual public Mapbox token if available.
-    const MAPBOX_TOKEN = 'pk.eyJ1IjoiY291bnRyeWxpZmVmb29kcyIsImEiOiJjbHl3MzUxd2IwaHkxMmlxdDFrcWw3bHExIn0.5Z-1z2-94_9_4_9_4_9_9_9';
+    const MAPBOX_TOKEN = document.querySelector('meta[name="mapbox-token"]')?.getAttribute('content') || '';
 
     function apiUrl(path) {
         const params = new URLSearchParams(window.location.search);
@@ -191,7 +188,9 @@
         const search = document.getElementById('location-search').value.toLowerCase();
         const filtered = locations.filter(l =>
             (l.business_name || '').toLowerCase().includes(search) ||
-            (l.city || '').toLowerCase().includes(search)
+            (l.city || '').toLowerCase().includes(search) ||
+            (l.province_state || '').toLowerCase().includes(search) ||
+            (l.country || '').toLowerCase().includes(search)
         );
 
         const list = document.getElementById('locations-list');
@@ -203,7 +202,7 @@
                     <div class="flex justify-between items-start">
                         <div>
                             <h4 class="font-semibold text-sm text-zinc-900">${l.business_name || 'Unnamed Location'}</h4>
-                            <p class="text-xs text-zinc-500 mt-1">${l.address_line_1 || ''} ${l.city ? ', ' + l.city : ''}</p>
+                            <p class="text-xs text-zinc-500 mt-1">${[l.address_line_1, l.city, l.province_state, l.country].filter(Boolean).join(', ')}</p>
                         </div>
                         <div class="flex items-center">
                             <span class="material-symbols-outlined text-[16px] ${hasCoords ? 'text-green-500' : 'text-red-400'}" title="${hasCoords ? 'Synced' : 'Missing Coords'}">
@@ -263,7 +262,7 @@
                     `<div class="p-2">
                         <h3 class="font-bold text-sm">${loc.business_name || 'B2B Location'}</h3>
                         <p class="text-xs text-gray-600">${loc.address_line_1 || ''}</p>
-                        <p class="text-xs text-gray-600">${loc.city || ''}, ${loc.province_state || ''}</p>
+                        <p class="text-xs text-gray-600">${[loc.city, loc.province_state, loc.country].filter(Boolean).join(', ')}</p>
                     </div>`
                 );
 

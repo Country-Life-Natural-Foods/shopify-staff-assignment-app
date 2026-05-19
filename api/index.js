@@ -78,8 +78,10 @@ const publicDir = path.join(process.cwd(), 'public');
 function injectShopifyApiKeyMeta(html) {
   const apiKey = process.env.SHOPIFY_API_KEY || '';
   const safe = apiKey.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const mapboxToken = process.env.MAPBOX_PUBLIC_TOKEN || process.env.MAPBOX_ACCESS_TOKEN || '';
+  const safeMapbox = mapboxToken.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   if (!html.includes('<head>')) return html;
-  return html.replace('<head>', `<head>\n<meta name="shopify-api-key" content="${safe}">\n`);
+  return html.replace('<head>', `<head>\n<meta name="shopify-api-key" content="${safe}">\n<meta name="mapbox-token" content="${safeMapbox}">\n`);
 }
 
 function sendAppHtmlFile(res, filename) {
