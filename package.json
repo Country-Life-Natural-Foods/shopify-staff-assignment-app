@@ -7,13 +7,19 @@
     "start": "node api/index.js",
     "dev": "node api/index.js",
     "build": "npm install",
-    "deploy": "vercel --prod"
+    "deploy": "vercel --prod",
+    "neon": "neonctl",
+    "neon:auth": "neonctl auth",
+    "neon:projects": "neonctl projects list",
+    "neon:connection-string": "neonctl connection-string"
   },
   "dependencies": {
     "@shopify/shopify-api": "^11.14.1",
     "@shopify/shopify-app-express": "^5.0.20",
+    "@shopify/shopify-app-session-storage-postgresql": "^4.0.20",
     "@shopify/shopify-app-session-storage-redis": "^4.2.13",
     "axios": "^1.6.0",
+    "connect-pg-simple": "^10.0.0",
     "connect-redis": "^7.1.0",
     "connect-sqlite3": "^0.9.13",
     "cookie-parser": "^1.4.7",
@@ -23,10 +29,12 @@
     "express-session": "^1.17.3",
     "helmet": "^7.1.0",
     "node-cron": "^3.0.3",
+    "pg": "^8.21.0",
     "redis": "^4.6.13",
     "sqlite3": "^5.1.7"
   },
   "devDependencies": {
+    "neonctl": "^2.22.0",
     "vercel": "^54.1.0"
   },
   "keywords": [

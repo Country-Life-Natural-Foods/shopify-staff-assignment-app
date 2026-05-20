@@ -1,8 +1,6 @@
 const express = require('express');
 const fs = require('fs');
 const session = require('express-session');
-const { createClient } = require('redis');
-const RedisStore = require('connect-redis').default;
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -28,6 +26,7 @@ const {
   applyShopifyDeploymentEnv,
   resolveShopifyHostName,
 } = require('../lib/resolve-shopify-hostname');
+const { configureSessionStorage } = require('../lib/configure-session-storage');
 
 applyShopifyDeploymentEnv();
 
@@ -118,79 +117,12 @@ app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// In-memory session storage (implements methods required by @shopify/shopify-app-express webhooks)
-const memorySessionStorage = {
-  sessions: new Map(),
-  storeSession(sessionData) {
-    return new Promise((resolve) => {
-      const payload = JSON.stringify(sessionData.toPropertyArray());
-      const expires = sessionData.expires ? sessionData.expires.getTime() : null;
-      this.sessions.set(sessionData.id, { payload, expires });
-      resolve(true);
-    });
-  },
-  loadSession(id) {
-    return new Promise((resolve) => {
-      if (!id) return resolve(null);
-      const sessionData = this.sessions.get(id);
-      if (!sessionData) return resolve(null);
-      if (sessionData.expires && sessionData.expires < Date.now()) {
-        this.sessions.delete(id);
-        return resolve(null);
-      }
-      try {
-        const entries = JSON.parse(sessionData.payload);
-        resolve(Session.fromPropertyArray(entries));
-      } catch (parseError) {
-        console.error('Error parsing session data:', parseError);
-        resolve(null);
-      }
-    });
-  },
-  deleteSession(id) {
-    return new Promise((resolve) => {
-      this.sessions.delete(id);
-      resolve(true);
-    });
-  },
-  async findSessionsByShop(shopDomain) {
-    const needle = String(shopDomain || '')
-      .toLowerCase()
-      .replace(/^https?:\/\//, '');
-    const matches = [];
-    for (const id of this.sessions.keys()) {
-      const s = await this.loadSession(id);
-      if (s && String(s.shop || '').toLowerCase() === needle) {
-        matches.push(s);
-      }
-    }
-    return matches;
-  },
-  async deleteSessions(ids) {
-    await Promise.all(ids.map((id) => this.deleteSession(id)));
-  },
-};
-
-let shopifySessionStorage = memorySessionStorage;
-let expressSessionStore;
-
-const redisUrl = (process.env.REDIS_URL || process.env.KV_URL || '').trim();
-const hasRedis = Boolean(redisUrl);
-if (redisUrl) {
-  const { RedisSessionStorage } = require('@shopify/shopify-app-session-storage-redis');
-  shopifySessionStorage = new RedisSessionStorage(redisUrl);
-  const redisClient = createClient({ url: redisUrl });
-  redisClient.on('error', (err) => console.error('[redis] express session client', err));
-  redisClient.connect().catch((err) => console.error('[redis] connect failed', err));
-  expressSessionStore = new RedisStore({
-    client: redisClient,
-    prefix: 'staff_app_express:',
-  });
-} else if (isProduction) {
-  console.error(
-    '[shopify] REDIS_URL is not set. OAuth sessions are in-memory only; embedded admin will redirect in a loop on Vercel. Add Upstash/Vercel Redis and set REDIS_URL, then redeploy and reinstall the app.',
-  );
-}
+const {
+  shopifySessionStorage,
+  expressSessionStore,
+  backend: sessionBackend,
+  hasPersistentStorage,
+} = configureSessionStorage({ Session, isProduction });
 
 // Express session setup
 app.use(session({
@@ -342,10 +274,10 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     hostName,
-    redis: hasRedis,
-    sessionStorage: hasRedis ? 'redis' : 'memory',
-    warning: isProduction && !hasRedis
-      ? 'REDIS_URL is required on Vercel for embedded app OAuth; without it the admin iframe auth loop will fail.'
+    sessionStorage: sessionBackend,
+    persistentSessions: hasPersistentStorage,
+    warning: isProduction && !hasPersistentStorage
+      ? 'Set REDIS_URL (Upstash) or DATABASE_URL (Neon/Supabase Postgres) for production sessions.'
       : undefined,
   });
 });

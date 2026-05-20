@@ -72,10 +72,10 @@ This guide will help you deploy your Shopify Staff Assignment App to Vercel for 
    - **Install Command**: `npm install`
    - **Development Command**: `npm run dev`
 
-4. **Add Redis (required for embedded admin on Vercel)**:
-   - In the Vercel project: **Storage** → create **Upstash Redis** or **Vercel Redis**
-   - Connect it to the project so `REDIS_URL` is injected (or copy the `redis://…` URL into env vars manually)
-   - Without Redis, OAuth completes on one serverless instance but the next request hits another instance with no session → infinite reload and Shopify’s “browser cookies” error
+4. **Add shared session storage (required for embedded admin on Vercel)** — pick **one** free option:
+   - **Option A — Upstash Redis:** Storage → **Upstash Redis** → connect → `REDIS_URL` is injected
+   - **Option B — Postgres (no Redis):** Storage → **Neon** (or Supabase) → connect → `DATABASE_URL` / `POSTGRES_URL` is injected
+   - Without either, OAuth completes on one serverless instance but the next request hits another with no session → infinite reload and Shopify’s “browser cookies” error
 
 5. **Add Environment Variables**:
    ```
@@ -84,7 +84,8 @@ This guide will help you deploy your Shopify Staff Assignment App to Vercel for 
    SHOPIFY_APP_URL=https://your-app-name.vercel.app
    SHOPIFY_SCOPES=read_companies,write_companies
    SESSION_SECRET=generate_a_strong_random_secret_here
-   REDIS_URL=redis://...   # from Vercel/Upstash storage integration
+   REDIS_URL=redis://...        # Option A: from Upstash
+   # DATABASE_URL=postgresql://...  # Option B: from Neon (use this OR Redis, not neither)
    NODE_ENV=production
    PORT=3000
    ```
@@ -122,7 +123,8 @@ In Vercel dashboard, go to your project → Settings → Environment Variables:
 | `SHOPIFY_APP_URL` | `https://your-app.vercel.app` | Your Vercel URL |
 | `SHOPIFY_SCOPES` | `read_companies,write_companies` | Required scopes |
 | `SESSION_SECRET` | `random_string` | Strong random secret |
-| `REDIS_URL` | `redis://…` | **Required** — Shopify + Express sessions (Upstash/Vercel Redis) |
+| `REDIS_URL` | `redis://…` | **Option A** — sessions (Upstash; free tier) |
+| `DATABASE_URL` | `postgresql://…` | **Option B** — sessions (Neon/Supabase; free tier) |
 | `NODE_ENV` | `production` | Environment |
 | `PORT` | `3000` | Port (Vercel handles this) |
 
