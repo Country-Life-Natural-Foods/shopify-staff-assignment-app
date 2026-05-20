@@ -72,18 +72,24 @@ This guide will help you deploy your Shopify Staff Assignment App to Vercel for 
    - **Install Command**: `npm install`
    - **Development Command**: `npm run dev`
 
-4. **Add Environment Variables**:
+4. **Add Redis (required for embedded admin on Vercel)**:
+   - In the Vercel project: **Storage** → create **Upstash Redis** or **Vercel Redis**
+   - Connect it to the project so `REDIS_URL` is injected (or copy the `redis://…` URL into env vars manually)
+   - Without Redis, OAuth completes on one serverless instance but the next request hits another instance with no session → infinite reload and Shopify’s “browser cookies” error
+
+5. **Add Environment Variables**:
    ```
    SHOPIFY_API_KEY=your_actual_api_key_here
    SHOPIFY_API_SECRET=your_actual_api_secret_here
    SHOPIFY_APP_URL=https://your-app-name.vercel.app
    SHOPIFY_SCOPES=read_companies,write_companies
    SESSION_SECRET=generate_a_strong_random_secret_here
+   REDIS_URL=redis://...   # from Vercel/Upstash storage integration
    NODE_ENV=production
    PORT=3000
    ```
 
-5. **Deploy**:
+6. **Deploy**:
    - Click "Deploy"
    - Wait for deployment to complete
    - Get your app URL: `https://your-app-name.vercel.app`
@@ -116,6 +122,7 @@ In Vercel dashboard, go to your project → Settings → Environment Variables:
 | `SHOPIFY_APP_URL` | `https://your-app.vercel.app` | Your Vercel URL |
 | `SHOPIFY_SCOPES` | `read_companies,write_companies` | Required scopes |
 | `SESSION_SECRET` | `random_string` | Strong random secret |
+| `REDIS_URL` | `redis://…` | **Required** — Shopify + Express sessions (Upstash/Vercel Redis) |
 | `NODE_ENV` | `production` | Environment |
 | `PORT` | `3000` | Port (Vercel handles this) |
 

@@ -81,7 +81,21 @@ function injectShopifyApiKeyMeta(html) {
   const mapboxToken = process.env.MAPBOX_PUBLIC_TOKEN || process.env.MAPBOX_ACCESS_TOKEN || '';
   const safeMapbox = mapboxToken.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   if (!html.includes('<head>')) return html;
-  return html.replace('<head>', `<head>\n<meta name="shopify-api-key" content="${safe}">\n<meta name="mapbox-token" content="${safeMapbox}">\n`);
+  const embeddedHead = [
+    `<meta name="shopify-api-key" content="${safe}">`,
+    `<meta name="mapbox-token" content="${safeMapbox}">`,
+    '<script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>',
+  ].join('\n');
+  return html.replace('<head>', `<head>\n${embeddedHead}\n`);
+}
+
+function buildAppRootRedirectUrl(shop, query = {}) {
+  const params = new URLSearchParams();
+  if (shop) params.set('shop', shop);
+  const host = query.host;
+  if (host) params.set('host', host);
+  const qs = params.toString();
+  return qs ? `/?${qs}` : '/';
 }
 
 function sendAppHtmlFile(res, filename) {
@@ -160,7 +174,8 @@ const memorySessionStorage = {
 let shopifySessionStorage = memorySessionStorage;
 let expressSessionStore;
 
-const redisUrl = (process.env.REDIS_URL || '').trim();
+const redisUrl = (process.env.REDIS_URL || process.env.KV_URL || '').trim();
+const hasRedis = Boolean(redisUrl);
 if (redisUrl) {
   const { RedisSessionStorage } = require('@shopify/shopify-app-session-storage-redis');
   shopifySessionStorage = new RedisSessionStorage(redisUrl);
@@ -172,8 +187,8 @@ if (redisUrl) {
     prefix: 'staff_app_express:',
   });
 } else if (isProduction) {
-  console.warn(
-    '[shopify] REDIS_URL is not set. Sessions are in-memory and will not work reliably on Vercel. Add Vercel Redis (or any Redis) and set REDIS_URL.',
+  console.error(
+    '[shopify] REDIS_URL is not set. OAuth sessions are in-memory only; embedded admin will redirect in a loop on Vercel. Add Upstash/Vercel Redis and set REDIS_URL, then redeploy and reinstall the app.',
   );
 }
 
@@ -226,7 +241,7 @@ const shopifyAppInstance = shopifyApp({
     async afterAuth({ session: shopifySession, req, res }) {
       req.session.shop = shopifySession.shop;
       req.session.shopSessionId = shopifySession.id;
-      return res.redirect(`/?shop=${shopifySession.shop}`);
+      return res.redirect(buildAppRootRedirectUrl(shopifySession.shop, req.query));
     },
   },
   webhooks: {
@@ -323,7 +338,16 @@ app.get(
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    hostName,
+    redis: hasRedis,
+    sessionStorage: hasRedis ? 'redis' : 'memory',
+    warning: isProduction && !hasRedis
+      ? 'REDIS_URL is required on Vercel for embedded app OAuth; without it the admin iframe auth loop will fail.'
+      : undefined,
+  });
 });
 
 const getGraphqlClient = async (req, res) => {

@@ -7,8 +7,7 @@ embedded = true
 
 [auth]
 redirect_urls = [
-  "https://shopify-staff-assignment-app-pi.vercel.app/auth/callback",
-  "https://shopify-staff-assignment-app-pi.vercel.app/auth/shopify/callback"
+  "https://shopify-staff-assignment-app-pi.vercel.app/auth/callback"
 ]
 
 [access_scopes]
