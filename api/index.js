@@ -12,6 +12,17 @@ if (process.env.SHOPIFY_API_KEY) process.env.SHOPIFY_API_KEY = process.env.SHOPI
 if (process.env.SHOPIFY_API_SECRET) process.env.SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET.trim();
 if (process.env.SHOPIFY_APP_URL) process.env.SHOPIFY_APP_URL = process.env.SHOPIFY_APP_URL.trim();
 if (process.env.SESSION_SECRET) process.env.SESSION_SECRET = process.env.SESSION_SECRET.trim();
+for (const key of Object.keys(process.env)) {
+  if (
+    key.startsWith('POSTGRES_') ||
+    key.startsWith('PG') ||
+    key === 'DATABASE_URL' ||
+    key === 'DATABASE_URL_UNPOOLED'
+  ) {
+    const v = process.env[key];
+    if (typeof v === 'string') process.env[key] = v.trim();
+  }
+}
 
 require('@shopify/shopify-api/adapters/node');
 
@@ -88,15 +99,6 @@ function injectShopifyApiKeyMeta(html) {
   return html.replace('<head>', `<head>\n${embeddedHead}\n`);
 }
 
-function buildAppRootRedirectUrl(shop, query = {}) {
-  const params = new URLSearchParams();
-  if (shop) params.set('shop', shop);
-  const host = query.host;
-  if (host) params.set('host', host);
-  const qs = params.toString();
-  return qs ? `/?${qs}` : '/';
-}
-
 function sendAppHtmlFile(res, filename) {
   const filePath = path.join(publicDir, filename);
   const html = fs.readFileSync(filePath, 'utf8');
@@ -170,11 +172,6 @@ const shopifyAppInstance = shopifyApp({
   auth: {
     path: '/auth',
     callbackPath: '/auth/callback',
-    async afterAuth({ session: shopifySession, req, res }) {
-      req.session.shop = shopifySession.shop;
-      req.session.shopSessionId = shopifySession.id;
-      return res.redirect(buildAppRootRedirectUrl(shopifySession.shop, req.query));
-    },
   },
   webhooks: {
     path: '/webhooks',
@@ -252,10 +249,11 @@ app.get('/exitiframe', (req, res) => {
   `);
 });
 
+// Embedded app home: only ensureInstalledOnShop (matches server.js). Session tokens
+// are validated on /api/* via validateAuthenticatedSession + App Bridge Bearer JWT.
 app.get(
   '/',
   ensureInstalledOnShop,
-  validateAuthenticatedSession,
   shopifyCspHeaders,
   (req, res) => {
     try {
