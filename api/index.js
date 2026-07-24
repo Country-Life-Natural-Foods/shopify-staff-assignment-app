@@ -500,13 +500,21 @@ app.get('/api/locations', validateAuthenticatedSession, async (req, res) => {
   }
 });
 
-// B2B Sync Route
+// B2B Sync Route — uses the authenticated shop session (no SHOPIFY_SHOP_DOMAIN required).
 app.post('/api/sync-b2b-map', validateAuthenticatedSession, async (req, res) => {
   try {
+    const session = res.locals.shopify?.session;
+    if (!session?.shop || !session?.accessToken) {
+      return res.status(401).json({ error: 'No authenticated Shopify session' });
+    }
     const { runSync } = require('../lib/sync-b2b-map');
-    const stats = await runSync();
+    const stats = await runSync({
+      shop: session.shop,
+      accessToken: session.accessToken,
+    });
     res.json({ success: true, ...stats });
   } catch (err) {
+    console.error('B2B Map Sync error:', err);
     res.status(500).json({ error: err.message });
   }
 });
