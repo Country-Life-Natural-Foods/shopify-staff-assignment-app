@@ -303,13 +303,23 @@
 
         try {
             const res = await window.shopifyApiFetch(apiUrl('/api/sync-b2b-map'), { method: 'POST' });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || 'Sync failed');
+            const raw = await res.text();
+            let data = null;
+            try {
+                data = raw ? JSON.parse(raw) : null;
+            } catch {
+                if (res.status === 504) {
+                    throw new Error('Sync timed out on the server. Re-run sync (it continues from cached coords) or raise function maxDuration.');
+                }
+                throw new Error((raw || `HTTP ${res.status}`).slice(0, 180));
+            }
+            if (!res.ok) throw new Error(data?.error || 'Sync failed');
 
+            const incompleteNote = data.incomplete ? ' (partial — run again to continue)' : '';
             // Show success toast
             const toast = document.getElementById('error-toast');
             toast.className = 'toast fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 bg-green-600 text-white px-6 py-3 rounded-lg shadow-xl z-50 flex items-center gap-2 max-w-[90vw] md:max-w-md w-full active';
-            toast.innerHTML = `<span class="material-symbols-outlined">check_circle</span><p class="text-sm font-medium flex-1">Sync Complete! Created: ${data.created}, Updated: ${data.updated}</p>`;
+            toast.innerHTML = `<span class="material-symbols-outlined">check_circle</span><p class="text-sm font-medium flex-1">Sync Complete! Created: ${data.created}, Updated: ${data.updated}${incompleteNote}</p>`;
             setTimeout(() => {
                 toast.classList.remove('active');
                 setTimeout(() => {

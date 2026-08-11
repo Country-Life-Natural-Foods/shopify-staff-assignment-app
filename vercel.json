@@ -1,10 +1,10 @@
 {
   "functions": {
     "api/index.js": {
-      "maxDuration": 30
+      "maxDuration": 300
     },
     "api/simple.js": {
-      "maxDuration": 30
+      "maxDuration": 300
     }
   },
   "rewrites": [
