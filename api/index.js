@@ -298,6 +298,30 @@ const throwIfGraphqlErrors = (response, label) => {
   }
 };
 
+// Helper: calculate days between orders and stats
+const calculateOrderStats = (orderDates) => {
+  if (!orderDates || orderDates.length === 0) {
+    return { lastOrderDate: null, daysSinceLastOrder: null, avgDaysBetweenOrders: null };
+  }
+
+  const dates = orderDates.map(d => new Date(d)).sort((a, b) => b - a);
+  const lastOrderDate = dates[0];
+  const now = new Date();
+  const daysSinceLastOrder = Math.floor((now - lastOrderDate) / (1000 * 60 * 60 * 24));
+
+  let avgDaysBetweenOrders = null;
+  if (dates.length >= 2) {
+    const gaps = [];
+    for (let i = 0; i < dates.length - 1; i++) {
+      const gap = (dates[i] - dates[i + 1]) / (1000 * 60 * 60 * 24);
+      gaps.push(gap);
+    }
+    avgDaysBetweenOrders = Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length);
+  }
+
+  return { lastOrderDate: lastOrderDate.toISOString(), daysSinceLastOrder, avgDaysBetweenOrders };
+};
+
 // Fetch real companies with performance data
 const fetchAllCompanies = async (client) => {
   if (!client) return [];
@@ -311,6 +335,9 @@ const fetchAllCompanies = async (client) => {
             externalId
             createdAt
             updatedAt
+            metafield(namespace: "clnf", key: "crm_notes") {
+              value
+            }
             locations(first: 10) {
               edges {
                 node {
@@ -374,11 +401,11 @@ const fetchAllCompanies = async (client) => {
 
       let totalSpend = 0;
       let orderCount = 0;
-      let lastOrderDate = null;
+      let orderDates = [];
       try {
         const ordersQuery = `
         query getCompanyOrders($query: String!) {
-          orders(first: 100, query: $query) {
+          orders(first: 25, query: $query, sortKey: CREATED_AT, reverse: true) {
             edges {
               node {
                 totalPriceSet {
@@ -407,17 +434,35 @@ const fetchAllCompanies = async (client) => {
           return sum + (amt != null ? parseFloat(amt) : 0);
         }, 0);
         orderCount = orders.length;
-        lastOrderDate = orders.length > 0 ? orders[0].createdAt : null;
+        orderDates = orders.map(o => o.createdAt);
       } catch (orderErr) {
         console.warn('orders for company', company.id, orderErr.message);
+      }
+
+      const orderStats = calculateOrderStats(orderDates);
+
+      // Parse notes from metafield
+      let notes = [];
+      try {
+        const notesValue = company.metafield?.value;
+        if (notesValue) {
+          notes = JSON.parse(notesValue);
+          if (!Array.isArray(notes)) notes = [];
+        }
+      } catch (e) {
+        console.warn('Failed to parse notes for company', company.id, e.message);
       }
 
       company.performance = {
         totalSpend,
         orderCount,
-        lastOrderDate,
+        lastOrderDate: orderStats.lastOrderDate,
+        daysSinceLastOrder: orderStats.daysSinceLastOrder,
+        avgDaysBetweenOrders: orderStats.avgDaysBetweenOrders,
         avgOrderValue: orderCount > 0 ? totalSpend / orderCount : 0
       };
+
+      company.notes = notes;
 
       all.push(company);
     }
@@ -440,6 +485,246 @@ app.get('/api/companies', validateAuthenticatedSession, async (req, res) => {
       return sendShopifyApiError(res, error);
     }
     console.error('GET /api/companies', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get notes for a specific company
+app.get('/api/companies/:companyId/notes', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { companyId } = req.params;
+    const query = `
+      query getCompanyNotes($id: ID!) {
+        company(id: $id) {
+          id
+          metafield(namespace: "clnf", key: "crm_notes") {
+            value
+          }
+        }
+      }
+    `;
+
+    const response = await client.query({
+      data: { query, variables: { id: companyId } },
+    });
+    throwIfGraphqlErrors(response, 'company notes');
+
+    let notes = [];
+    const metafield = response.body?.data?.company?.metafield;
+    if (metafield?.value) {
+      try {
+        notes = JSON.parse(metafield.value);
+        if (!Array.isArray(notes)) notes = [];
+      } catch (e) {
+        console.warn('Failed to parse notes', e.message);
+      }
+    }
+
+    res.json({ notes });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/companies/:companyId/notes', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add a note to a company
+app.post('/api/companies/:companyId/notes', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { companyId } = req.params;
+    const { body, author } = req.body;
+
+    if (!body || !author) {
+      return res.status(400).json({ error: 'body and author required' });
+    }
+
+    // Fetch existing notes
+    const getQuery = `
+      query getCompanyNotes($id: ID!) {
+        company(id: $id) {
+          id
+          metafield(namespace: "clnf", key: "crm_notes") {
+            value
+          }
+        }
+      }
+    `;
+
+    const getResponse = await client.query({
+      data: { query: getQuery, variables: { id: companyId } },
+    });
+    throwIfGraphqlErrors(getResponse, 'fetch company notes');
+
+    let notes = [];
+    const metafield = getResponse.body?.data?.company?.metafield;
+    if (metafield?.value) {
+      try {
+        notes = JSON.parse(metafield.value);
+        if (!Array.isArray(notes)) notes = [];
+      } catch (e) {
+        notes = [];
+      }
+    }
+
+    // Create new note
+    const newNote = {
+      id: `note_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      body,
+      author,
+      createdAt: new Date().toISOString()
+    };
+
+    notes.unshift(newNote);
+
+    // Update metafield
+    const updateQuery = `
+      mutation updateCompanyMetafield($input: CompanyInput!) {
+        companyUpdate(input: $input) {
+          company {
+            id
+            metafield(namespace: "clnf", key: "crm_notes") {
+              value
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    const updateResponse = await client.query({
+      data: {
+        query: updateQuery,
+        variables: {
+          input: {
+            id: companyId,
+            metafields: [
+              {
+                namespace: 'clnf',
+                key: 'crm_notes',
+                type: 'json',
+                value: JSON.stringify(notes)
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    throwIfGraphqlErrors(updateResponse, 'update company notes');
+    const userErrors = updateResponse.body?.data?.companyUpdate?.userErrors;
+    if (userErrors && userErrors.length > 0) {
+      throw new Error(userErrors.map(e => e.message).join('; '));
+    }
+
+    res.json({ note: newNote });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('POST /api/companies/:companyId/notes', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete a note from a company
+app.delete('/api/companies/:companyId/notes/:noteId', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { companyId, noteId } = req.params;
+
+    // Fetch existing notes
+    const getQuery = `
+      query getCompanyNotes($id: ID!) {
+        company(id: $id) {
+          id
+          metafield(namespace: "clnf", key: "crm_notes") {
+            value
+          }
+        }
+      }
+    `;
+
+    const getResponse = await client.query({
+      data: { query: getQuery, variables: { id: companyId } },
+    });
+    throwIfGraphqlErrors(getResponse, 'fetch company notes');
+
+    let notes = [];
+    const metafield = getResponse.body?.data?.company?.metafield;
+    if (metafield?.value) {
+      try {
+        notes = JSON.parse(metafield.value);
+        if (!Array.isArray(notes)) notes = [];
+      } catch (e) {
+        notes = [];
+      }
+    }
+
+    // Remove the note
+    notes = notes.filter(n => n.id !== noteId);
+
+    // Update metafield
+    const updateQuery = `
+      mutation updateCompanyMetafield($input: CompanyInput!) {
+        companyUpdate(input: $input) {
+          company {
+            id
+            metafield(namespace: "clnf", key: "crm_notes") {
+              value
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    const updateResponse = await client.query({
+      data: {
+        query: updateQuery,
+        variables: {
+          input: {
+            id: companyId,
+            metafields: [
+              {
+                namespace: 'clnf',
+                key: 'crm_notes',
+                type: 'json',
+                value: JSON.stringify(notes)
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    throwIfGraphqlErrors(updateResponse, 'delete note');
+    const userErrors = updateResponse.body?.data?.companyUpdate?.userErrors;
+    if (userErrors && userErrors.length > 0) {
+      throw new Error(userErrors.map(e => e.message).join('; '));
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('DELETE /api/companies/:companyId/notes/:noteId', error);
     res.status(500).json({ error: error.message });
   }
 });
