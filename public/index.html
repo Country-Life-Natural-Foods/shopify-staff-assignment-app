@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-    <title>B2B Map Sync Dashboard</title>
+    <title>B2B Dashboard</title>
     <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
@@ -13,7 +13,6 @@
         body { font-family: 'Inter', sans-serif; background-color: #f6faff; }
         .loading-overlay { display: none; }
         .loading-overlay.active { display: flex; }
-        /* Keep X/Y on one transform — Tailwind -translate-x-1/2 was overriding hide and leaving the red bar visible */
         .toast {
             transform: translate(-50%, calc(100% + 1.5rem));
             opacity: 0;
@@ -26,6 +25,12 @@
             pointer-events: auto;
         }
         #map { width: 100%; height: 100%; min-height: 400px; border-radius: 0.5rem; }
+        .badge-green { background-color: #dcfce7; color: #166534; }
+        .badge-amber { background-color: #fef3c7; color: #92400e; }
+        .badge-red { background-color: #fee2e2; color: #991b1b; }
+        .tab-active { border-b-2 border-[#008060] color: #008060; }
+        .notes-drawer { transform: translateX(100%); transition: transform 0.3s ease; }
+        .notes-drawer.active { transform: translateX(0); }
     </style>
 </head>
 <body class="text-zinc-900 bg-[#f6faff]">
@@ -35,9 +40,9 @@
     <div class="flex items-center gap-4">
         <div class="flex items-center gap-2">
             <div class="w-8 h-8 rounded-lg bg-[#008060] flex items-center justify-center">
-                <span class="material-symbols-outlined text-white text-sm">map</span>
+                <span class="material-symbols-outlined text-white text-sm">dashboard</span>
             </div>
-            <span class="font-bold text-lg hidden sm:block">B2B Map Sync</span>
+            <span class="font-bold text-lg hidden sm:block">B2B Dashboard</span>
         </div>
     </div>
     <div class="flex items-center gap-3">
@@ -48,7 +53,21 @@
     </div>
 </nav>
 
-<!-- Status Toast (hidden until showToast) -->
+<!-- Tabs -->
+<div class="border-b border-zinc-200 bg-white sticky top-16 z-30">
+    <div class="flex px-4 md:px-6">
+        <button id="tab-customers" onclick="switchTab('customers')" class="px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 border-transparent hover:border-zinc-300 transition-colors tab-active">
+            <span class="material-symbols-outlined text-sm">people</span>
+            Customers
+        </button>
+        <button id="tab-map" onclick="switchTab('map')" class="px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 border-transparent hover:border-zinc-300 transition-colors">
+            <span class="material-symbols-outlined text-sm">map</span>
+            Map
+        </button>
+    </div>
+</div>
+
+<!-- Status Toast -->
 <div id="status-toast" class="toast fixed bottom-20 md:bottom-6 left-1/2 bg-red-600 text-white px-6 py-3 rounded-lg shadow-xl z-50 flex items-center gap-2 max-w-[90vw] md:max-w-md w-full" role="status" aria-live="polite">
     <span class="material-symbols-outlined" data-toast-icon>error</span>
     <p class="text-sm font-medium flex-1" data-toast-message></p>
@@ -57,42 +76,75 @@
 <!-- Loading Overlay -->
 <div id="loading-overlay" class="loading-overlay fixed inset-0 bg-white/80 backdrop-blur-sm z-50 items-center justify-center flex-col gap-4">
     <div class="w-12 h-12 border-4 border-[#008060]/20 border-t-[#008060] rounded-full animate-spin"></div>
-    <p class="text-[#008060] font-medium animate-pulse">Loading B2B locations...</p>
+    <p class="text-[#008060] font-medium animate-pulse">Loading...</p>
 </div>
 
-<div class="flex h-[calc(100vh-64px)] overflow-hidden">
-    <!-- Main Content Area -->
-    <main class="flex-1 overflow-y-auto w-full md:pb-0 pb-16">
-        <div class="p-4 md:p-6 lg:p-8 max-w-[1600px] mx-auto space-y-6">
-
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                <!-- Stats Cards -->
-                <div class="bg-white rounded-xl p-5 border border-zinc-200 shadow-sm">
-                    <div class="flex justify-between items-start mb-2">
-                        <p class="text-sm font-medium text-zinc-500">Total B2B Locations</p>
-                        <div class="p-2 bg-blue-50 rounded-lg"><span class="material-symbols-outlined text-blue-600 text-[20px]">pin_drop</span></div>
-                    </div>
-                    <h3 class="text-2xl font-bold text-zinc-900" id="locations-stat">-</h3>
+<div class="flex h-[calc(100vh-120px)] overflow-hidden">
+    <!-- Customers Tab -->
+    <div id="customers-view" class="flex-1 flex flex-col overflow-hidden w-full">
+        <!-- Filters & Search -->
+        <div class="border-b border-zinc-200 bg-white p-4 md:p-6 flex-shrink-0">
+            <div class="max-w-[1600px] mx-auto space-y-4">
+                <div class="relative">
+                    <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 text-sm">search</span>
+                    <input id="company-search" type="text" placeholder="Search by company name..." class="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none transition-all" onkeyup="renderCustomers()"/>
                 </div>
-                <div class="bg-white rounded-xl p-5 border border-zinc-200 shadow-sm">
-                    <div class="flex justify-between items-start mb-2">
-                        <p class="text-sm font-medium text-zinc-500">Synced to Map</p>
-                        <div class="p-2 bg-green-50 rounded-lg"><span class="material-symbols-outlined text-green-600 text-[20px]">check_circle</span></div>
-                    </div>
-                    <h3 class="text-2xl font-bold text-zinc-900" id="synced-stat">-</h3>
-                </div>
-                <div class="bg-white rounded-xl p-5 border border-zinc-200 shadow-sm">
-                    <div class="flex justify-between items-start mb-2">
-                        <p class="text-sm font-medium text-zinc-500">Missing Coordinates</p>
-                        <div class="p-2 bg-red-50 rounded-lg"><span class="material-symbols-outlined text-red-600 text-[20px]">warning</span></div>
-                    </div>
-                    <h3 class="text-2xl font-bold text-zinc-900" id="missing-stat">-</h3>
+                <div class="flex flex-wrap gap-2">
+                    <button onclick="setFilter('all')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-[#008060] text-white" data-filter="all">All Companies</button>
+                    <button onclick="setFilter('30')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="30">Last 30 Days</button>
+                    <button onclick="setFilter('89')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="89">31-89 Days</button>
+                    <button onclick="setFilter('90')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="90">90+ Days</button>
+                    <button onclick="setFilter('never')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="never">Never Ordered</button>
                 </div>
             </div>
+        </div>
 
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Companies List -->
+        <div class="flex-1 overflow-y-auto">
+            <div class="max-w-[1600px] mx-auto w-full">
+                <div class="divide-y divide-zinc-200" id="companies-list">
+                    <!-- Companies populated by JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Map Tab -->
+    <div id="map-view" class="hidden flex-1 flex flex-col overflow-hidden w-full">
+        <!-- Stats Cards -->
+        <div class="border-b border-zinc-200 bg-white p-4 md:p-6 flex-shrink-0">
+            <div class="max-w-[1600px] mx-auto">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-white rounded-xl p-5 border border-zinc-200 shadow-sm">
+                        <div class="flex justify-between items-start mb-2">
+                            <p class="text-sm font-medium text-zinc-500">Total B2B Locations</p>
+                            <div class="p-2 bg-blue-50 rounded-lg"><span class="material-symbols-outlined text-blue-600 text-[20px]">pin_drop</span></div>
+                        </div>
+                        <h3 class="text-2xl font-bold text-zinc-900" id="locations-stat">-</h3>
+                    </div>
+                    <div class="bg-white rounded-xl p-5 border border-zinc-200 shadow-sm">
+                        <div class="flex justify-between items-start mb-2">
+                            <p class="text-sm font-medium text-zinc-500">Synced to Map</p>
+                            <div class="p-2 bg-green-50 rounded-lg"><span class="material-symbols-outlined text-green-600 text-[20px]">check_circle</span></div>
+                        </div>
+                        <h3 class="text-2xl font-bold text-zinc-900" id="synced-stat">-</h3>
+                    </div>
+                    <div class="bg-white rounded-xl p-5 border border-zinc-200 shadow-sm">
+                        <div class="flex justify-between items-start mb-2">
+                            <p class="text-sm font-medium text-zinc-500">Missing Coordinates</p>
+                            <div class="p-2 bg-red-50 rounded-lg"><span class="material-symbols-outlined text-red-600 text-[20px]">warning</span></div>
+                        </div>
+                        <h3 class="text-2xl font-bold text-zinc-900" id="missing-stat">-</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Map Layout -->
+        <div class="flex-1 overflow-hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full p-4 md:p-6 max-w-[1600px] mx-auto w-full">
                 <!-- Locations List -->
-                <div class="bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden flex flex-col h-[600px]">
+                <div class="bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden flex flex-col">
                     <div class="p-5 border-b border-zinc-100 flex-shrink-0">
                         <h2 class="text-lg font-bold">Location Directory</h2>
                         <div class="relative mt-3">
@@ -106,7 +158,7 @@
                 </div>
 
                 <!-- Map View -->
-                <div class="lg:col-span-2 bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden h-[600px] flex flex-col">
+                <div class="lg:col-span-2 bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden flex flex-col">
                     <div class="p-5 border-b border-zinc-100 flex-shrink-0 flex justify-between items-center">
                         <h2 class="text-lg font-bold">Geographic Distribution</h2>
                         <span class="text-sm text-zinc-500">Powered by Mapbox</span>
@@ -121,15 +173,39 @@
                 </div>
             </div>
         </div>
-    </main>
+    </div>
+
+    <!-- Notes Drawer -->
+    <div id="notes-drawer" class="notes-drawer fixed right-0 top-0 h-full w-full md:w-96 bg-white shadow-xl z-40 flex flex-col border-l border-zinc-200">
+        <div class="p-4 border-b border-zinc-200 flex justify-between items-center flex-shrink-0">
+            <h3 class="font-bold text-lg" id="notes-company-name">Notes</h3>
+            <button onclick="closeNotes()" class="p-1 hover:bg-zinc-100 rounded-md">
+                <span class="material-symbols-outlined text-xl">close</span>
+            </button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 space-y-3" id="notes-list">
+            <!-- Notes populated by JS -->
+        </div>
+        <div class="p-4 border-t border-zinc-200 flex-shrink-0 space-y-2">
+            <textarea id="note-input" placeholder="Add a note..." class="w-full p-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none transition-all" rows="3"></textarea>
+            <button onclick="saveNote()" class="w-full bg-[#008060] text-white px-3 py-2 rounded-md text-sm font-medium hover:bg-[#00654b] active:scale-[0.98] transition-all">
+                Save Note
+            </button>
+        </div>
+    </div>
 </div>
 
 <script>window.shopifyApiFetch = window.fetch.bind(window);</script>
 <script type="module" src="/shopify-session-bootstrap.js"></script>
 <script>
+    let companies = [];
     let locations = [];
     let map;
     let markers = [];
+    let currentTab = 'customers';
+    let currentFilter = 'all';
+    let selectedCompanyId = null;
+    let toastHideTimer = null;
 
     const MAPBOX_TOKEN = document.querySelector('meta[name="mapbox-token"]')?.getAttribute('content') || '';
 
@@ -148,8 +224,6 @@
         document.getElementById('loading-overlay').classList.toggle('active', active);
     }
 
-    let toastHideTimer = null;
-
     function showToast(msg, type = 'error') {
         const toast = document.getElementById('status-toast');
         const isSuccess = type === 'success';
@@ -166,15 +240,47 @@
         showToast(msg, 'error');
     }
 
+    function switchTab(tab) {
+        currentTab = tab;
+        document.getElementById('customers-view').classList.toggle('hidden', tab !== 'customers');
+        document.getElementById('map-view').classList.toggle('hidden', tab !== 'map');
+        document.getElementById('tab-customers').classList.toggle('tab-active', tab === 'customers');
+        document.getElementById('tab-map').classList.toggle('tab-active', tab === 'map');
+
+        if (tab === 'map' && !map) {
+            setTimeout(initMap, 100);
+        }
+    }
+
+    function setFilter(filter) {
+        currentFilter = filter;
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            const isActive = btn.dataset.filter === filter;
+            btn.classList.toggle('bg-[#008060]', isActive);
+            btn.classList.toggle('text-white', isActive);
+            btn.classList.toggle('bg-zinc-200', !isActive);
+            btn.classList.toggle('text-zinc-900', !isActive);
+        });
+        renderCustomers();
+    }
+
     async function loadData() {
         setLoading(true);
         try {
-            const res = await window.shopifyApiFetch(apiUrl('/api/locations'));
-            const data = await res.json();
-            
-            if (!res.ok) throw new Error(data.error || 'Failed to load locations');
+            const [companiesRes, locationsRes] = await Promise.all([
+                window.shopifyApiFetch(apiUrl('/api/companies')),
+                window.shopifyApiFetch(apiUrl('/api/locations'))
+            ]);
 
-            locations = (data.edges || []).map(e => {
+            if (!companiesRes.ok) throw new Error('Failed to load companies');
+            if (!locationsRes.ok) throw new Error('Failed to load locations');
+
+            const companiesData = await companiesRes.json();
+            const locationsData = await locationsRes.json();
+
+            companies = (companiesData.edges || []).map(e => e.node);
+
+            locations = (locationsData.edges || []).map(e => {
                 const fields = {};
                 e.node.fields.forEach(f => fields[f.key] = f.value);
                 return {
@@ -184,9 +290,8 @@
                 };
             });
 
+            renderCustomers();
             renderSummary();
-            renderLocations();
-            initMap();
         } catch (e) {
             console.error(e);
             showError(e.message);
@@ -195,12 +300,181 @@
         }
     }
 
+    function getDaysSinceBadgeClass(daysSince) {
+        if (daysSince === null || daysSince === undefined) return 'badge-red';
+        if (daysSince <= 30) return 'badge-green';
+        if (daysSince <= 89) return 'badge-amber';
+        return 'badge-red';
+    }
+
+    function getDaysSinceBadgeText(daysSince) {
+        if (daysSince === null || daysSince === undefined) return 'Never';
+        if (daysSince === 0) return 'Today';
+        if (daysSince === 1) return 'Yesterday';
+        return `${daysSince} days`;
+    }
+
+    function shouldShowCompany(company) {
+        if (currentFilter === 'all') return true;
+        const days = company.performance?.daysSinceLastOrder;
+        if (currentFilter === '30') return days !== null && days <= 30;
+        if (currentFilter === '89') return days !== null && days > 30 && days <= 89;
+        if (currentFilter === '90') return days !== null && days > 89;
+        if (currentFilter === 'never') return days === null;
+        return true;
+    }
+
+    function renderCustomers() {
+        const search = document.getElementById('company-search').value.toLowerCase();
+        const filtered = companies.filter(c => {
+            const matchesSearch = (c.name || '').toLowerCase().includes(search);
+            const matchesFilter = shouldShowCompany(c);
+            return matchesSearch && matchesFilter;
+        });
+
+        const list = document.getElementById('companies-list');
+        list.innerHTML = filtered.map(c => {
+            const perf = c.performance || {};
+            const daysSince = perf.daysSinceLastOrder;
+            const badgeClass = getDaysSinceBadgeClass(daysSince);
+            const badgeText = getDaysSinceBadgeText(daysSince);
+            const lastOrder = perf.lastOrderDate ? new Date(perf.lastOrderDate).toLocaleDateString() : '-';
+            const avgGap = perf.avgDaysBetweenOrders || '-';
+            const notes = c.notes || [];
+
+            return `
+                <div class="p-4 border-b border-zinc-100 last:border-0 hover:bg-zinc-50 transition-colors cursor-pointer" onclick="openNotes('${c.id}', '${c.name.replace(/'/g, "\\'")}')">
+                    <div class="flex justify-between items-start mb-2">
+                        <div class="flex-1">
+                            <h4 class="font-semibold text-sm text-zinc-900">${c.name}</h4>
+                            ${c.externalId ? `<p class="text-xs text-zinc-500 mt-1">ID: ${c.externalId}</p>` : ''}
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="px-2 py-1 rounded text-xs font-medium ${badgeClass}">${badgeText}</span>
+                            ${notes.length > 0 ? `<span class="material-symbols-outlined text-sm text-[#008060]">note</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-3 gap-4 mt-3 text-xs">
+                        <div>
+                            <p class="text-zinc-500 mb-1">Last Order</p>
+                            <p class="font-medium text-zinc-900">${lastOrder}</p>
+                        </div>
+                        <div>
+                            <p class="text-zinc-500 mb-1">Avg Gap</p>
+                            <p class="font-medium text-zinc-900">${avgGap}${avgGap !== '-' ? ' days' : ''}</p>
+                        </div>
+                        <div>
+                            <p class="text-zinc-500 mb-1">Notes</p>
+                            <p class="font-medium text-zinc-900">${notes.length}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('') || '<div class="p-8 text-center text-zinc-500"><span class="material-symbols-outlined text-4xl mb-2 block">search_off</span><p>No companies found</p></div>';
+    }
+
+    async function openNotes(companyId, companyName) {
+        selectedCompanyId = companyId;
+        document.getElementById('notes-company-name').textContent = companyName;
+        document.getElementById('note-input').value = '';
+        document.getElementById('notes-drawer').classList.add('active');
+
+        try {
+            const res = await window.shopifyApiFetch(apiUrl(`/api/companies/${companyId}/notes`));
+            if (!res.ok) throw new Error('Failed to load notes');
+            const data = await res.json();
+            renderNotes(data.notes || []);
+        } catch (e) {
+            showError('Failed to load notes: ' + e.message);
+        }
+    }
+
+    function closeNotes() {
+        document.getElementById('notes-drawer').classList.remove('active');
+        selectedCompanyId = null;
+    }
+
+    function renderNotes(notes) {
+        const list = document.getElementById('notes-list');
+        list.innerHTML = notes.map(note => {
+            const date = new Date(note.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+            return `
+                <div class="p-3 bg-zinc-50 rounded-lg border border-zinc-200">
+                    <div class="flex justify-between items-start mb-1">
+                        <p class="text-xs font-medium text-zinc-500">${note.author}</p>
+                        <button onclick="deleteNote('${note.id}')" class="p-1 hover:bg-zinc-200 rounded text-zinc-400 hover:text-zinc-600 transition-colors">
+                            <span class="material-symbols-outlined text-sm">close</span>
+                        </button>
+                    </div>
+                    <p class="text-xs text-zinc-400 mb-2">${date}</p>
+                    <p class="text-sm text-zinc-700">${note.body}</p>
+                </div>
+            `;
+        }).join('') || '<p class="text-sm text-zinc-500 text-center py-4">No notes yet</p>';
+    }
+
+    async function saveNote() {
+        if (!selectedCompanyId) return;
+        const body = document.getElementById('note-input').value.trim();
+        if (!body) {
+            showError('Please enter a note');
+            return;
+        }
+
+        try {
+            const res = await window.shopifyApiFetch(apiUrl(`/api/companies/${selectedCompanyId}/notes`), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ body, author: 'Sales Team' })
+            });
+            if (!res.ok) throw new Error('Failed to save note');
+
+            showToast('Note saved', 'success');
+            document.getElementById('note-input').value = '';
+
+            // Reload notes
+            const notesRes = await window.shopifyApiFetch(apiUrl(`/api/companies/${selectedCompanyId}/notes`));
+            if (notesRes.ok) {
+                const data = await notesRes.json();
+                renderNotes(data.notes || []);
+                // Update company list to show note count
+                renderCustomers();
+            }
+        } catch (e) {
+            showError('Failed to save note: ' + e.message);
+        }
+    }
+
+    async function deleteNote(noteId) {
+        if (!selectedCompanyId) return;
+        if (!confirm('Delete this note?')) return;
+
+        try {
+            const res = await window.shopifyApiFetch(apiUrl(`/api/companies/${selectedCompanyId}/notes/${noteId}`), {
+                method: 'DELETE'
+            });
+            if (!res.ok) throw new Error('Failed to delete note');
+
+            showToast('Note deleted', 'success');
+
+            // Reload notes
+            const notesRes = await window.shopifyApiFetch(apiUrl(`/api/companies/${selectedCompanyId}/notes`));
+            if (notesRes.ok) {
+                const data = await notesRes.json();
+                renderNotes(data.notes || []);
+                // Update company list to show note count
+                renderCustomers();
+            }
+        } catch (e) {
+            showError('Failed to delete note: ' + e.message);
+        }
+    }
+
+    // Map functions (existing)
     function renderSummary() {
         document.getElementById('locations-stat').textContent = locations.length.toLocaleString();
-
         const synced = locations.filter(l => l.latitude && l.longitude).length;
         document.getElementById('synced-stat').textContent = synced.toLocaleString();
-
         const missing = locations.length - synced;
         document.getElementById('missing-stat').textContent = missing.toLocaleString();
     }
@@ -215,7 +489,6 @@
         );
 
         const list = document.getElementById('locations-list');
-
         list.innerHTML = filtered.map(l => {
             const hasCoords = l.latitude && l.longitude;
             return `
@@ -238,23 +511,17 @@
 
     function initMap() {
         if (!MAPBOX_TOKEN) return;
-
         document.getElementById('map-placeholder').style.display = 'none';
-
         try {
             mapboxgl.accessToken = MAPBOX_TOKEN;
             map = new mapboxgl.Map({
                 container: 'map',
                 style: 'mapbox://styles/mapbox/light-v11',
-                center: [-98.5795, 39.8283], // Center of US
+                center: [-98.5795, 39.8283],
                 zoom: 3
             });
-
             map.addControl(new mapboxgl.NavigationControl());
-
-            map.on('load', () => {
-                updateMarkers();
-            });
+            map.on('load', () => updateMarkers());
         } catch (e) {
             console.error('Mapbox init error:', e);
             document.getElementById('map-placeholder').style.display = 'flex';
@@ -263,57 +530,36 @@
 
     function updateMarkers() {
         if (!map) return;
-
-        // Clear existing
         markers.forEach(m => m.remove());
         markers = [];
-
         const bounds = new mapboxgl.LngLatBounds();
         let hasValidCoords = false;
-
         locations.forEach(loc => {
             const lat = parseFloat(loc.latitude);
             const lng = parseFloat(loc.longitude);
-
             if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
                 hasValidCoords = true;
-
-                // Create popup
-                const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(
-                    `<div class="p-2">
+                const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(`
+                    <div class="p-2">
                         <h3 class="font-bold text-sm">${loc.business_name || 'B2B Location'}</h3>
                         <p class="text-xs text-gray-600">${loc.address_line_1 || ''}</p>
                         <p class="text-xs text-gray-600">${[loc.city, loc.province_state, loc.country].filter(Boolean).join(', ')}</p>
-                    </div>`
-                );
-
-                // Create marker
+                    </div>
+                `);
                 const el = document.createElement('div');
                 el.className = 'w-6 h-6 bg-[#008060] rounded-full border-2 border-white shadow-md flex items-center justify-center cursor-pointer';
                 el.innerHTML = '<span class="w-2 h-2 bg-white rounded-full"></span>';
-
-                const marker = new mapboxgl.Marker(el)
-                    .setLngLat([lng, lat])
-                    .setPopup(popup)
-                    .addTo(map);
-
+                const marker = new mapboxgl.Marker(el).setLngLat([lng, lat]).setPopup(popup).addTo(map);
                 markers.push(marker);
                 bounds.extend([lng, lat]);
             }
         });
-
-        if (hasValidCoords && markers.length > 0) {
-            map.fitBounds(bounds, { padding: 50, maxZoom: 10 });
-        }
+        if (hasValidCoords && markers.length > 0) map.fitBounds(bounds, { padding: 50, maxZoom: 10 });
     }
 
     function flyToLocation(lat, lng) {
         if (!map || !lat || !lng) return;
-        map.flyTo({
-            center: [lng, lat],
-            zoom: 12,
-            essential: true
-        });
+        map.flyTo({ center: [lng, lat], zoom: 12, essential: true });
     }
 
     async function syncMap() {
@@ -321,7 +567,6 @@
         const original = btn.innerHTML;
         btn.disabled = true;
         btn.innerHTML = '<span class="material-symbols-outlined text-sm animate-spin">sync</span> Syncing...';
-
         try {
             const res = await window.shopifyApiFetch(apiUrl('/api/sync-b2b-map'), { method: 'POST' });
             const raw = await res.text();
@@ -329,17 +574,12 @@
             try {
                 data = raw ? JSON.parse(raw) : null;
             } catch {
-                if (res.status === 504) {
-                    throw new Error('Sync timed out on the server. Re-run sync (it continues from cached coords) or raise function maxDuration.');
-                }
+                if (res.status === 504) throw new Error('Sync timed out. Re-run sync or raise function maxDuration.');
                 throw new Error((raw || `HTTP ${res.status}`).slice(0, 180));
             }
             if (!res.ok) throw new Error(data?.error || 'Sync failed');
-
             const incompleteNote = data.incomplete ? ' (partial — run again to continue)' : '';
             showToast(`Sync Complete! Created: ${data.created}, Updated: ${data.updated}${incompleteNote}`, 'success');
-
-            // Reload data
             await loadData();
         } catch (e) {
             showError('Sync failed: ' + e.message);
