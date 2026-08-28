@@ -50,6 +50,10 @@
             <span class="material-symbols-outlined text-sm">shield_person</span>
             Claim Admin
         </button>
+        <button id="claim-staff-btn" onclick="openClaimStaffModal()" style="display:none;" class="bg-amber-500 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-amber-600 active:scale-[0.98] transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">person_add</span>
+            Link My Account
+        </button>
         <button id="sync-btn" onclick="syncMap()" class="bg-[#008060] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[#00654b] active:scale-[0.98] transition-all flex items-center gap-2">
             <span class="material-symbols-outlined text-sm">sync</span>
             Run Map Sync
@@ -278,6 +282,20 @@
         </div>
     </div>
 
+    <!-- Link My Account Modal (Reps) -->
+    <div id="claim-staff-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg max-w-md w-full p-6 shadow-xl">
+            <h3 class="text-lg font-bold mb-2">Which staff record is you?</h3>
+            <p class="text-sm text-zinc-500 mb-4">A manager already added your name in Staff Management. Pick it below to link it to this Shopify login.</p>
+            <div id="claim-staff-list" class="space-y-2 max-h-64 overflow-y-auto">
+                <!-- Populated by JS -->
+            </div>
+            <div class="flex gap-2 mt-6">
+                <button onclick="closeClaimStaffModal()" class="flex-1 px-4 py-2 border border-zinc-200 rounded-md text-sm font-medium hover:bg-zinc-50">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Notes Drawer -->
     <div id="notes-drawer" class="notes-drawer fixed right-0 top-0 h-full w-full md:w-96 bg-white shadow-xl z-40 flex flex-col border-l border-zinc-200">
         <div class="p-4 border-b border-zinc-200 flex justify-between items-center flex-shrink-0">
@@ -445,7 +463,7 @@
 
         const myStaffId = staffList[0]?.id || null;
         if (!myStaffId) {
-            return `<span class="text-zinc-400 italic">Ask a manager to add you as staff first</span>`;
+            return `<span class="text-zinc-400 italic">Use "Link My Account" above, or ask a manager to add you as staff</span>`;
         }
 
         const assignedId = c.assignedStaff?.staffId;
@@ -794,6 +812,21 @@
     }
 
     let isManagerGlobal = false;
+    let hasAnyManagerGlobal = false;
+
+    function escapeHtml(str) {
+        return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+    }
+
+    // Reps only get to self-assign/see their own commissions once their login is
+    // linked to a staff record (see /api/staff/:staffId/claim) — until then hide
+    // the tab-specific "you" logic behind "Link My Account".
+    function updateClaimStaffVisibility() {
+        const show = !isManagerGlobal && hasAnyManagerGlobal && staffList.length === 0;
+        document.getElementById('claim-staff-btn').style.display = show ? '' : 'none';
+    }
 
     async function checkUserRole() {
         try {
@@ -801,6 +834,7 @@
             if (!res.ok) return;
             const data = await res.json();
             isManagerGlobal = !!data.isManager;
+            hasAnyManagerGlobal = !!data.hasAnyManager;
             document.getElementById('tab-staff').style.display = isManagerGlobal ? '' : 'none';
             document.getElementById('claim-admin-btn').style.display = data.hasAnyManager ? 'none' : '';
         } catch (e) {
@@ -820,7 +854,49 @@
 
             showToast('You are now the admin', 'success');
             await checkUserRole();
+            await loadStaff(true);
+            updateClaimStaffVisibility();
             switchTab('staff');
+        } catch (e) {
+            showError(e.message);
+        }
+    }
+
+    async function openClaimStaffModal() {
+        document.getElementById('claim-staff-modal').classList.remove('hidden');
+        const list = document.getElementById('claim-staff-list');
+        list.innerHTML = '<p class="text-sm text-zinc-500">Loading...</p>';
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/staff/unclaimed'));
+            if (!res.ok) throw new Error('Failed to load staff list');
+            const data = await res.json();
+            const unclaimed = data.staff || [];
+            list.innerHTML = unclaimed.map(s => `
+                <button onclick="claimStaff('${s.id}')" class="w-full text-left px-3 py-2 border border-zinc-200 rounded-md text-sm hover:bg-zinc-50 flex justify-between items-center">
+                    <span>${escapeHtml(s.name)}</span>
+                    <span class="text-xs text-zinc-400">${s.role === 'manager' ? 'Manager' : 'Sales Rep'}</span>
+                </button>
+            `).join('') || '<p class="text-sm text-zinc-500 text-center py-4">No unclaimed staff records. Ask a manager to add you first.</p>';
+        } catch (e) {
+            list.innerHTML = `<p class="text-sm text-red-500">${escapeHtml(e.message)}</p>`;
+        }
+    }
+
+    function closeClaimStaffModal() {
+        document.getElementById('claim-staff-modal').classList.add('hidden');
+    }
+
+    async function claimStaff(staffId) {
+        try {
+            const res = await window.shopifyApiFetch(apiUrl(`/api/staff/${staffId}/claim`), { method: 'POST' });
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(data?.error || 'Failed to link account');
+
+            showToast('Account linked', 'success');
+            closeClaimStaffModal();
+            await loadStaff(true);
+            updateClaimStaffVisibility();
+            renderCustomers();
         } catch (e) {
             showError(e.message);
         }
@@ -949,12 +1025,16 @@
     document.getElementById('staff-modal').addEventListener('click', (e) => {
         if (e.target.id === 'staff-modal') closeAddStaffModal();
     });
+    document.getElementById('claim-staff-modal').addEventListener('click', (e) => {
+        if (e.target.id === 'claim-staff-modal') closeClaimStaffModal();
+    });
 
     let started = false;
     async function init() {
         if (started) return;
         started = true;
         await Promise.all([checkUserRole(), loadStaff(true)]);
+        updateClaimStaffVisibility();
         loadData();
     }
     window.addEventListener('shopify:api-fetch-ready', init, { once: true });

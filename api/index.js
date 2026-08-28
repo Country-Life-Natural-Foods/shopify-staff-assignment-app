@@ -437,8 +437,10 @@ const calculateOrderStats = (orderDates) => {
 // search filter, but `company_id` isn't a real order search field: Shopify
 // silently ignored it and returned the shop's most recent orders overall for
 // every company (hence identical "last order: today" results with numbers
-// that weren't actually that company's). recentOrders below is only used to
-// derive last-order-date/order-cadence stats, not revenue totals.
+// that weren't actually that company's). Last-order-date/order-cadence stats
+// are left null (see calculateOrderStats([]) below) until read_marketplace_orders/
+// read_quick_sale can be granted without triggering the reauth loop described
+// in the revert of this feature.
 const fetchAllCompanies = async (client) => {
   if (!client) return [];
   const query = `
@@ -850,6 +852,46 @@ app.post('/api/staff/claim-admin', validateAuthenticatedSession, async (req, res
     res.json({ staff: record });
   } catch (error) {
     console.error('POST /api/staff/claim-admin', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// A manager adding a rep via POST /api/staff only knows their name/email —
+// there's no scope-safe way for the app to look up which Shopify login that
+// corresponds to, so the record is created with shopifyUserId unset. These two
+// endpoints let the rep self-identify and link their own login to it, the same
+// way claim-admin bootstraps the first manager.
+app.get('/api/staff/unclaimed', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const unclaimed = await staffStore.findUnclaimed();
+    res.json({ staff: unclaimed.map((s) => ({ id: s.id, name: s.name, role: s.role })) });
+  } catch (error) {
+    console.error('GET /api/staff/unclaimed', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/staff/:staffId/claim', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    if (!user?.shopifyUserId) {
+      return res.status(400).json({ error: 'Could not identify your Shopify account from this session.' });
+    }
+
+    const already = await staffStore.findByShopifyUserId(user.shopifyUserId);
+    if (already) {
+      return res.status(409).json({ error: 'This Shopify login is already linked to a staff record.' });
+    }
+
+    const { staffId } = req.params;
+    const record = await staffStore.claim(staffId, user.shopifyUserId);
+    if (!record) {
+      return res.status(409).json({ error: 'That staff record was not found or has already been claimed.' });
+    }
+
+    res.json({ staff: record });
+  } catch (error) {
+    console.error('POST /api/staff/:staffId/claim', error);
     res.status(500).json({ error: error.message });
   }
 });
