@@ -280,6 +280,48 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// In-memory staff registry (in production, store in database or metafield)
+let staffRegistry = {
+  staff: [
+    {
+      id: 'staff_default_admin',
+      name: 'Admin',
+      email: 'admin@countrylifefoods.com',
+      commissionTier: 0,
+      role: 'manager',
+      createdAt: new Date().toISOString()
+    }
+  ]
+};
+
+// Get current user from session
+const getCurrentUser = (req, res) => {
+  const session = res.locals.shopify?.session;
+  if (!session) return null;
+  return {
+    shop: session.shop,
+    id: session.id,
+    email: session.onlineAccessInfo?.associated_user?.email || 'unknown@shopify.com'
+  };
+};
+
+// Check if user is manager
+const isManager = (user) => {
+  if (!user) return false;
+  // For now, treat admins as managers. In production, check against staffRegistry
+  return user.email.includes('countrylifefoods.com') || user.email === 'isaac.lewin@countrylifefoods.com';
+};
+
+// Get staff by email
+const getStaffByEmail = (email) => {
+  return staffRegistry.staff.find(s => s.email === email);
+};
+
+// Get staff by ID
+const getStaffById = (id) => {
+  return staffRegistry.staff.find(s => s.id === id);
+};
+
 const getGraphqlClient = async (req, res) => {
   const sessionData = res.locals.shopify?.session;
   if (!sessionData) return null;
@@ -725,6 +767,265 @@ app.delete('/api/companies/:companyId/notes/:noteId', validateAuthenticatedSessi
       return sendShopifyApiError(res, error);
     }
     console.error('DELETE /api/companies/:companyId/notes/:noteId', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// STAFF MANAGEMENT ENDPOINTS
+
+// Get all staff (managers only) or current user's staff info
+app.get('/api/staff', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = getCurrentUser(req, res);
+    const isUserManager = isManager(user);
+
+    if (isUserManager) {
+      // Managers see all staff
+      res.json({ staff: staffRegistry.staff });
+    } else {
+      // Reps see only themselves
+      const staffMember = getStaffByEmail(user.email);
+      res.json({ staff: staffMember ? [staffMember] : [] });
+    }
+  } catch (error) {
+    console.error('GET /api/staff', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create/update staff member (managers only)
+app.post('/api/staff', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = getCurrentUser(req, res);
+    if (!isManager(user)) {
+      return res.status(403).json({ error: 'Only managers can manage staff' });
+    }
+
+    const { name, email, commissionTier, role } = req.body;
+    if (!name || !email || commissionTier === undefined || !role) {
+      return res.status(400).json({ error: 'name, email, commissionTier, and role required' });
+    }
+
+    if (!['manager', 'rep'].includes(role)) {
+      return res.status(400).json({ error: 'role must be "manager" or "rep"' });
+    }
+
+    if (commissionTier < 0 || commissionTier > 100) {
+      return res.status(400).json({ error: 'commissionTier must be between 0 and 100' });
+    }
+
+    // Check if staff member already exists
+    let existing = getStaffByEmail(email);
+    if (existing) {
+      // Update existing
+      existing.name = name;
+      existing.commissionTier = commissionTier;
+      existing.role = role;
+    } else {
+      // Create new
+      const newStaff = {
+        id: `staff_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        name,
+        email,
+        commissionTier,
+        role,
+        createdAt: new Date().toISOString()
+      };
+      staffRegistry.staff.push(newStaff);
+      existing = newStaff;
+    }
+
+    res.json({ staff: existing });
+  } catch (error) {
+    console.error('POST /api/staff', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete staff member (managers only)
+app.delete('/api/staff/:staffId', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = getCurrentUser(req, res);
+    if (!isManager(user)) {
+      return res.status(403).json({ error: 'Only managers can manage staff' });
+    }
+
+    const { staffId } = req.params;
+    const index = staffRegistry.staff.findIndex(s => s.id === staffId);
+    if (index === -1) {
+      return res.status(404).json({ error: 'Staff member not found' });
+    }
+
+    staffRegistry.staff.splice(index, 1);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('DELETE /api/staff/:staffId', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get commissions for a period (with role-based access)
+app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = getCurrentUser(req, res);
+    const isUserManager = isManager(user);
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    // Fetch all companies with their assignments and revenue
+    const companies = await fetchAllCompanies(client);
+
+    // Build commission data by staff
+    const commissionsMap = {};
+
+    for (const company of companies) {
+      if (!company.locations || !company.locations.edges) continue;
+
+      for (const locationEdge of company.locations.edges) {
+        const location = locationEdge.node;
+        if (!location.staffMemberAssignments || !location.staffMemberAssignments.edges) continue;
+
+        for (const assignmentEdge of location.staffMemberAssignments.edges) {
+          const assignment = assignmentEdge.node;
+          const staffMember = assignment.staffMember;
+          if (!staffMember) continue;
+
+          const staffName = `${staffMember.firstName || ''} ${staffMember.lastName || ''}`.trim();
+          const staffEmail = staffMember.email || `rep_${staffMember.id}`;
+
+          // Find commission tier for this staff member
+          const staffRecord = getStaffByEmail(staffEmail);
+          const commissionTier = staffRecord?.commissionTier || 5; // Default to 5% if not configured
+
+          if (!commissionsMap[staffEmail]) {
+            commissionsMap[staffEmail] = {
+              staffId: staffRecord?.id,
+              name: staffRecord?.name || staffName,
+              email: staffEmail,
+              commissionTier,
+              companies: [],
+              totalRevenue: 0,
+              totalCommission: 0
+            };
+          }
+
+          const revenue = company.performance?.totalSpend || 0;
+          const commission = (revenue * commissionTier) / 100;
+
+          commissionsMap[staffEmail].companies.push({
+            companyId: company.id,
+            companyName: company.name,
+            revenue,
+            commission,
+            lastOrderDate: company.performance?.lastOrderDate
+          });
+
+          commissionsMap[staffEmail].totalRevenue += revenue;
+          commissionsMap[staffEmail].totalCommission += commission;
+        }
+      }
+    }
+
+    let commissions = Object.values(commissionsMap);
+
+    // Apply role-based filtering
+    if (!isUserManager) {
+      // Reps can only see their own commissions
+      commissions = commissions.filter(c => c.email === user.email);
+    }
+
+    // Sort by total commission descending
+    commissions.sort((a, b) => b.totalCommission - a.totalCommission);
+
+    res.json({
+      commissions,
+      isManager: isUserManager,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/commissions', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get single rep's commission details (with privacy check)
+app.get('/api/commissions/:staffEmail', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = getCurrentUser(req, res);
+    const isUserManager = isManager(user);
+    const { staffEmail } = req.params;
+
+    // Privacy check: reps can only see their own, managers can see all
+    if (!isUserManager && user.email !== staffEmail) {
+      return res.status(403).json({ error: 'You can only view your own commissions' });
+    }
+
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const companies = await fetchAllCompanies(client);
+    let repCommissions = null;
+
+    for (const company of companies) {
+      if (!company.locations || !company.locations.edges) continue;
+
+      for (const locationEdge of company.locations.edges) {
+        const location = locationEdge.node;
+        if (!location.staffMemberAssignments || !location.staffMemberAssignments.edges) continue;
+
+        for (const assignmentEdge of location.staffMemberAssignments.edges) {
+          const assignment = assignmentEdge.node;
+          const staffMember = assignment.staffMember;
+          if (!staffMember) continue;
+
+          const currentEmail = staffMember.email || `rep_${staffMember.id}`;
+          if (currentEmail !== staffEmail) continue;
+
+          if (!repCommissions) {
+            const staffRecord = getStaffByEmail(staffEmail);
+            const commissionTier = staffRecord?.commissionTier || 5;
+            repCommissions = {
+              staffId: staffRecord?.id,
+              name: staffRecord?.name || `${staffMember.firstName || ''} ${staffMember.lastName || ''}`.trim(),
+              email: staffEmail,
+              commissionTier,
+              companies: [],
+              totalRevenue: 0,
+              totalCommission: 0
+            };
+          }
+
+          const revenue = company.performance?.totalSpend || 0;
+          const commission = (revenue * repCommissions.commissionTier) / 100;
+
+          repCommissions.companies.push({
+            companyId: company.id,
+            companyName: company.name,
+            revenue,
+            commission,
+            lastOrderDate: company.performance?.lastOrderDate,
+            daysSinceLastOrder: company.performance?.daysSinceLastOrder
+          });
+
+          repCommissions.totalRevenue += revenue;
+          repCommissions.totalCommission += commission;
+        }
+      }
+    }
+
+    if (!repCommissions) {
+      return res.status(404).json({ error: 'No commissions found for this staff member' });
+    }
+
+    res.json({ commissions: repCommissions });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/commissions/:staffEmail', error);
     res.status(500).json({ error: error.message });
   }
 });
