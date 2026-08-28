@@ -166,6 +166,8 @@ const shopifyAppInstance = shopifyApp({
       'read_orders',
       'read_metaobjects',
       'write_metaobjects',
+      'read_marketplace_orders',
+      'read_quick_sale',
     ],
     hostName,
     hostScheme,
@@ -405,23 +407,6 @@ const setCompanyMetafield = async (client, companyId, key, value) => {
   }
 };
 
-// Runs `fn` over `items` with at most `limit` in flight at once. Used to fetch
-// per-company order history concurrently instead of one company at a time,
-// which was slow enough to feel like a hang on stores with many companies.
-const mapWithConcurrency = async (items, limit, fn) => {
-  const results = new Array(items.length);
-  let nextIndex = 0;
-  const worker = async () => {
-    while (nextIndex < items.length) {
-      const current = nextIndex++;
-      results[current] = await fn(items[current], current);
-    }
-  };
-  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);
-  await Promise.all(workers);
-  return results;
-};
-
 // Helper: calculate days between orders and stats
 const calculateOrderStats = (orderDates) => {
   if (!orderDates || orderDates.length === 0) {
@@ -446,7 +431,16 @@ const calculateOrderStats = (orderDates) => {
   return { lastOrderDate: lastOrderDate.toISOString(), daysSinceLastOrder, avgDaysBetweenOrders };
 };
 
-// Fetch real companies with performance data
+// Fetch real companies with performance data.
+//
+// totalSpent/ordersCount come straight from Shopify's own Company aggregates —
+// accurate regardless of order volume. An earlier version of this query tried
+// to compute these itself via the top-level `orders(query: "company_id:X")`
+// search filter, but `company_id` isn't a real order search field: Shopify
+// silently ignored it and returned the shop's most recent orders overall for
+// every company (hence identical "last order: today" results with numbers
+// that weren't actually that company's). recentOrders below is only used to
+// derive last-order-date/order-cadence stats, not revenue totals.
 const fetchAllCompanies = async (client) => {
   if (!client) return [];
   const query = `
@@ -459,6 +453,20 @@ const fetchAllCompanies = async (client) => {
             externalId
             createdAt
             updatedAt
+            totalSpent {
+              amount
+              currencyCode
+            }
+            ordersCount {
+              count
+            }
+            recentOrders: orders(first: 25, sortKey: CREATED_AT, reverse: true) {
+              edges {
+                node {
+                  createdAt
+                }
+              }
+            }
             metafield(namespace: "clnf", key: "crm_notes") {
               value
             }
@@ -490,52 +498,14 @@ const fetchAllCompanies = async (client) => {
     }
   `;
 
-  const ordersQuery = `
-    query getCompanyOrders($query: String!) {
-      orders(first: 25, query: $query, sortKey: CREATED_AT, reverse: true) {
-        edges {
-          node {
-            totalPriceSet {
-              shopMoney {
-                amount
-              }
-            }
-            createdAt
-          }
-        }
-      }
-    }
-  `;
-
-  // Fetch one company's orders + derived performance/notes/assignment fields.
-  const enrichCompany = async (company) => {
+  const enrichCompany = (company) => {
     if (company.locations == null) {
       company.locations = { edges: [] };
     }
 
-    let totalSpend = 0;
-    let orderCount = 0;
-    let orderDates = [];
-    try {
-      const ordersResponse = await client.query({
-        data: {
-          query: ordersQuery,
-          variables: { query: `company_id:${company.id.split('/').pop()}` }
-        }
-      });
-      throwIfGraphqlErrors(ordersResponse, 'orders');
-      const orderEdges = ordersResponse.body?.data?.orders?.edges;
-      const orders = orderEdges ? orderEdges.map((e) => e.node) : [];
-      totalSpend = orders.reduce((sum, order) => {
-        const amt = order?.totalPriceSet?.shopMoney?.amount;
-        return sum + (amt != null ? parseFloat(amt) : 0);
-      }, 0);
-      orderCount = orders.length;
-      orderDates = orders.map(o => o.createdAt);
-    } catch (orderErr) {
-      console.warn('orders for company', company.id, orderErr.message);
-    }
-
+    const totalSpend = parseFloat(company.totalSpent?.amount || '0') || 0;
+    const orderCount = company.ordersCount?.count || 0;
+    const orderDates = (company.recentOrders?.edges || []).map((e) => e.node.createdAt);
     const orderStats = calculateOrderStats(orderDates);
 
     // Parse notes from metafield
@@ -593,10 +563,7 @@ const fetchAllCompanies = async (client) => {
     const edges = companiesData.edges || [];
     const pageInfo = companiesData.pageInfo || { hasNextPage: false, endCursor: null };
 
-    // Enrich this page's companies with orders/performance concurrently (bounded,
-    // to stay well within Shopify's GraphQL rate limit) instead of one at a time.
-    const enriched = await mapWithConcurrency(edges, 5, (edge) => enrichCompany(edge.node));
-    all.push(...enriched);
+    all.push(...edges.map((edge) => enrichCompany(edge.node)));
 
     hasNextPage = Boolean(pageInfo.hasNextPage);
     cursor = pageInfo.endCursor || null;
