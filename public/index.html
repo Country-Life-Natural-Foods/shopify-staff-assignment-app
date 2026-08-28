@@ -493,6 +493,7 @@
             const badgeText = getDaysSinceBadgeText(daysSince);
             const lastOrder = perf.lastOrderDate ? new Date(perf.lastOrderDate).toLocaleDateString() : '-';
             const avgGap = perf.avgDaysBetweenOrders || '-';
+            const totalSpend = `$${(perf.totalSpend || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
             const notes = c.notes || [];
             const assignedRepCell = renderAssignedRepCell(c);
 
@@ -508,7 +509,11 @@
                             ${notes.length > 0 ? `<span class="material-symbols-outlined text-sm text-[#008060]">note</span>` : ''}
                         </div>
                     </div>
-                    <div class="grid grid-cols-3 gap-4 mt-3 text-xs">
+                    <div class="grid grid-cols-4 gap-4 mt-3 text-xs">
+                        <div>
+                            <p class="text-zinc-500 mb-1">Total Spend</p>
+                            <p class="font-medium text-zinc-900">${totalSpend}</p>
+                        </div>
                         <div>
                             <p class="text-zinc-500 mb-1">Last Order</p>
                             <p class="font-medium text-zinc-900">${lastOrder}</p>

@@ -437,10 +437,16 @@ const calculateOrderStats = (orderDates) => {
 // search filter, but `company_id` isn't a real order search field: Shopify
 // silently ignored it and returned the shop's most recent orders overall for
 // every company (hence identical "last order: today" results with numbers
-// that weren't actually that company's). Last-order-date/order-cadence stats
-// are left null (see calculateOrderStats([]) below) until read_marketplace_orders/
-// read_quick_sale can be granted without triggering the reauth loop described
-// in the revert of this feature.
+// that weren't actually that company's).
+//
+// recentOrders (Company.orders) is scoped correctly by construction — it's a
+// connection *on the company*, not a top-level search filter — and per
+// shopify.dev's Order reference it needs `read_orders` OR read_marketplace_orders
+// OR read_quick_sale (not all three; a prior version of this query added the
+// latter two "in addition to" read_orders, which was never necessary and is
+// what triggered an infinite reauth loop — see the revert of that change).
+// read_orders is already in this app's scope list below and was never removed,
+// so no scope/reauth change is needed for this field.
 const fetchAllCompanies = async (client) => {
   if (!client) return [];
   const query = `
@@ -459,6 +465,13 @@ const fetchAllCompanies = async (client) => {
             }
             ordersCount {
               count
+            }
+            recentOrders: orders(first: 25, sortKey: CREATED_AT, reverse: true) {
+              edges {
+                node {
+                  createdAt
+                }
+              }
             }
             metafield(namespace: "clnf", key: "crm_notes") {
               value
@@ -498,12 +511,8 @@ const fetchAllCompanies = async (client) => {
 
     const totalSpend = parseFloat(company.totalSpent?.amount || '0') || 0;
     const orderCount = company.ordersCount?.count || 0;
-    // Last-order-date/order-cadence would come from Company.orders, but that field
-    // (unlike totalSpent/ordersCount) additionally requires read_marketplace_orders
-    // and read_quick_sale, which Shopify does not grant via normal OAuth consent for
-    // this app (confirmed live: requesting them causes an infinite reauth loop, since
-    // the session never actually receives them). Left null until that's resolved.
-    const orderStats = calculateOrderStats([]);
+    const orderDates = (company.recentOrders?.edges || []).map((e) => e.node.createdAt);
+    const orderStats = calculateOrderStats(orderDates);
 
     // Parse notes from metafield
     let notes = [];
