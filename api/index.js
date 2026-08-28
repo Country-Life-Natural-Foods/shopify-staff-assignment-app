@@ -38,6 +38,7 @@ const {
   resolveShopifyHostName,
 } = require('../lib/resolve-shopify-hostname');
 const { configureSessionStorage } = require('../lib/configure-session-storage');
+const { configureStaffStore } = require('../lib/staff-store');
 
 applyShopifyDeploymentEnv();
 
@@ -163,6 +164,8 @@ const shopifyAppInstance = shopifyApp({
       'read_customers',
       'write_customers',
       'read_orders',
+      'read_metaobjects',
+      'write_metaobjects',
     ],
     hostName,
     hostScheme,
@@ -280,46 +283,40 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// In-memory staff registry (in production, store in database or metafield)
-let staffRegistry = {
-  staff: [
-    {
-      id: 'staff_default_admin',
-      name: 'Admin',
-      email: 'admin@countrylifefoods.com',
-      commissionTier: 0,
-      role: 'manager',
-      createdAt: new Date().toISOString()
-    }
-  ]
+const staffStore = configureStaffStore({ isProduction });
+
+// Decode the App Bridge session token (already required by validateAuthenticatedSession)
+// to get a stable per-user Shopify ID. Offline sessions carry no per-user info, so this
+// JWT is the only reliable way to know *who* is making the request, not just *which shop*.
+const getShopifyUserId = async (req) => {
+  const match = req.headers.authorization?.match(/Bearer (.+)/);
+  if (!match) return null;
+  try {
+    const payload = await shopify.session.decodeSessionToken(match[1]);
+    return payload.sub || null;
+  } catch (err) {
+    console.warn('Failed to decode session token', err.message);
+    return null;
+  }
 };
 
 // Get current user from session
-const getCurrentUser = (req, res) => {
+const getCurrentUser = async (req, res) => {
   const session = res.locals.shopify?.session;
   if (!session) return null;
+  const shopifyUserId = await getShopifyUserId(req);
   return {
     shop: session.shop,
     id: session.id,
-    email: session.onlineAccessInfo?.associated_user?.email || 'unknown@shopify.com'
+    shopifyUserId,
   };
 };
 
 // Check if user is manager
-const isManager = (user) => {
-  if (!user) return false;
-  // For now, treat admins as managers. In production, check against staffRegistry
-  return user.email.includes('countrylifefoods.com') || user.email === 'isaac.lewin@countrylifefoods.com';
-};
-
-// Get staff by email
-const getStaffByEmail = (email) => {
-  return staffRegistry.staff.find(s => s.email === email);
-};
-
-// Get staff by ID
-const getStaffById = (id) => {
-  return staffRegistry.staff.find(s => s.id === id);
+const isManager = async (user) => {
+  if (!user?.shopifyUserId) return false;
+  const staffRecord = await staffStore.findByShopifyUserId(user.shopifyUserId);
+  return staffRecord?.role === 'manager';
 };
 
 const getGraphqlClient = async (req, res) => {
@@ -337,6 +334,49 @@ const throwIfGraphqlErrors = (response, label) => {
   const errs = body?.errors;
   if (Array.isArray(errs) && errs.length) {
     throw new Error(`${label}: ${errs.map((e) => e.message).join('; ')}`);
+  }
+};
+
+// Metafields are written via the resource-agnostic metafieldsSet mutation.
+// (companyUpdate's CompanyInput no longer accepts an `id` or `metafields` field.)
+const setCompanyMetafield = async (client, companyId, key, value) => {
+  const mutation = `
+    mutation setCompanyMetafields($metafields: [MetafieldsSetInput!]!) {
+      metafieldsSet(metafields: $metafields) {
+        metafields {
+          id
+          key
+          value
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  const response = await client.query({
+    data: {
+      query: mutation,
+      variables: {
+        metafields: [
+          {
+            ownerId: companyId,
+            namespace: 'clnf',
+            key,
+            type: 'json',
+            value,
+          },
+        ],
+      },
+    },
+  });
+
+  throwIfGraphqlErrors(response, `set company metafield ${key}`);
+  const userErrors = response.body?.data?.metafieldsSet?.userErrors;
+  if (userErrors && userErrors.length > 0) {
+    throw new Error(userErrors.map((e) => e.message).join('; '));
   }
 };
 
@@ -380,6 +420,9 @@ const fetchAllCompanies = async (client) => {
             metafield(namespace: "clnf", key: "crm_notes") {
               value
             }
+            assignedStaffMetafield: metafield(namespace: "clnf", key: "assigned_staff") {
+              value
+            }
             locations(first: 10) {
               edges {
                 node {
@@ -391,19 +434,6 @@ const fetchAllCompanies = async (client) => {
                     province
                     country
                     zip
-                  }
-                  staffMemberAssignments(first: 50) {
-                    edges {
-                      node {
-                        id
-                        staffMember {
-                          id
-                          firstName
-                          lastName
-                          email
-                        }
-                      }
-                    }
                   }
                 }
               }
@@ -495,6 +525,18 @@ const fetchAllCompanies = async (client) => {
         console.warn('Failed to parse notes for company', company.id, e.message);
       }
 
+      // Parse assigned rep from metafield (app-owned; Shopify's native staff
+      // assignments require the protected read_users scope, which this app doesn't have)
+      let assignedStaff = null;
+      try {
+        const assignedValue = company.assignedStaffMetafield?.value;
+        if (assignedValue) {
+          assignedStaff = JSON.parse(assignedValue);
+        }
+      } catch (e) {
+        console.warn('Failed to parse assigned staff for company', company.id, e.message);
+      }
+
       company.performance = {
         totalSpend,
         orderCount,
@@ -505,6 +547,7 @@ const fetchAllCompanies = async (client) => {
       };
 
       company.notes = notes;
+      company.assignedStaff = assignedStaff;
 
       all.push(company);
     }
@@ -626,48 +669,7 @@ app.post('/api/companies/:companyId/notes', validateAuthenticatedSession, async 
 
     notes.unshift(newNote);
 
-    // Update metafield
-    const updateQuery = `
-      mutation updateCompanyMetafield($input: CompanyInput!) {
-        companyUpdate(input: $input) {
-          company {
-            id
-            metafield(namespace: "clnf", key: "crm_notes") {
-              value
-            }
-          }
-          userErrors {
-            field
-            message
-          }
-        }
-      }
-    `;
-
-    const updateResponse = await client.query({
-      data: {
-        query: updateQuery,
-        variables: {
-          input: {
-            id: companyId,
-            metafields: [
-              {
-                namespace: 'clnf',
-                key: 'crm_notes',
-                type: 'json',
-                value: JSON.stringify(notes)
-              }
-            ]
-          }
-        }
-      }
-    });
-
-    throwIfGraphqlErrors(updateResponse, 'update company notes');
-    const userErrors = updateResponse.body?.data?.companyUpdate?.userErrors;
-    if (userErrors && userErrors.length > 0) {
-      throw new Error(userErrors.map(e => e.message).join('; '));
-    }
+    await setCompanyMetafield(client, companyId, 'crm_notes', JSON.stringify(notes));
 
     res.json({ note: newNote });
   } catch (error) {
@@ -718,48 +720,7 @@ app.delete('/api/companies/:companyId/notes/:noteId', validateAuthenticatedSessi
     // Remove the note
     notes = notes.filter(n => n.id !== noteId);
 
-    // Update metafield
-    const updateQuery = `
-      mutation updateCompanyMetafield($input: CompanyInput!) {
-        companyUpdate(input: $input) {
-          company {
-            id
-            metafield(namespace: "clnf", key: "crm_notes") {
-              value
-            }
-          }
-          userErrors {
-            field
-            message
-          }
-        }
-      }
-    `;
-
-    const updateResponse = await client.query({
-      data: {
-        query: updateQuery,
-        variables: {
-          input: {
-            id: companyId,
-            metafields: [
-              {
-                namespace: 'clnf',
-                key: 'crm_notes',
-                type: 'json',
-                value: JSON.stringify(notes)
-              }
-            ]
-          }
-        }
-      }
-    });
-
-    throwIfGraphqlErrors(updateResponse, 'delete note');
-    const userErrors = updateResponse.body?.data?.companyUpdate?.userErrors;
-    if (userErrors && userErrors.length > 0) {
-      throw new Error(userErrors.map(e => e.message).join('; '));
-    }
+    await setCompanyMetafield(client, companyId, 'crm_notes', JSON.stringify(notes));
 
     res.json({ success: true });
   } catch (error) {
@@ -776,15 +737,15 @@ app.delete('/api/companies/:companyId/notes/:noteId', validateAuthenticatedSessi
 // Get all staff (managers only) or current user's staff info
 app.get('/api/staff', validateAuthenticatedSession, async (req, res) => {
   try {
-    const user = getCurrentUser(req, res);
-    const isUserManager = isManager(user);
+    const user = await getCurrentUser(req, res);
+    const isUserManager = await isManager(user);
 
     if (isUserManager) {
       // Managers see all staff
-      res.json({ staff: staffRegistry.staff });
+      res.json({ staff: await staffStore.list() });
     } else {
-      // Reps see only themselves
-      const staffMember = getStaffByEmail(user.email);
+      // Reps see only their own linked record, if any
+      const staffMember = await staffStore.findByShopifyUserId(user?.shopifyUserId);
       res.json({ staff: staffMember ? [staffMember] : [] });
     }
   } catch (error) {
@@ -796,8 +757,8 @@ app.get('/api/staff', validateAuthenticatedSession, async (req, res) => {
 // Create/update staff member (managers only)
 app.post('/api/staff', validateAuthenticatedSession, async (req, res) => {
   try {
-    const user = getCurrentUser(req, res);
-    if (!isManager(user)) {
+    const user = await getCurrentUser(req, res);
+    if (!(await isManager(user))) {
       return res.status(403).json({ error: 'Only managers can manage staff' });
     }
 
@@ -814,28 +775,19 @@ app.post('/api/staff', validateAuthenticatedSession, async (req, res) => {
       return res.status(400).json({ error: 'commissionTier must be between 0 and 100' });
     }
 
-    // Check if staff member already exists
-    let existing = getStaffByEmail(email);
-    if (existing) {
-      // Update existing
-      existing.name = name;
-      existing.commissionTier = commissionTier;
-      existing.role = role;
-    } else {
-      // Create new
-      const newStaff = {
-        id: `staff_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        name,
-        email,
-        commissionTier,
-        role,
-        createdAt: new Date().toISOString()
-      };
-      staffRegistry.staff.push(newStaff);
-      existing = newStaff;
-    }
+    const existingList = await staffStore.list();
+    const existing = existingList.find((s) => s.email === email);
+    const record = await staffStore.upsert({
+      id: existing?.id || `staff_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name,
+      email,
+      commissionTier,
+      role,
+      shopifyUserId: existing?.shopifyUserId || null,
+      createdAt: existing?.createdAt || new Date().toISOString(),
+    });
 
-    res.json({ staff: existing });
+    res.json({ staff: record });
   } catch (error) {
     console.error('POST /api/staff', error);
     res.status(500).json({ error: error.message });
@@ -845,18 +797,17 @@ app.post('/api/staff', validateAuthenticatedSession, async (req, res) => {
 // Delete staff member (managers only)
 app.delete('/api/staff/:staffId', validateAuthenticatedSession, async (req, res) => {
   try {
-    const user = getCurrentUser(req, res);
-    if (!isManager(user)) {
+    const user = await getCurrentUser(req, res);
+    if (!(await isManager(user))) {
       return res.status(403).json({ error: 'Only managers can manage staff' });
     }
 
     const { staffId } = req.params;
-    const index = staffRegistry.staff.findIndex(s => s.id === staffId);
-    if (index === -1) {
+    const removed = await staffStore.remove(staffId);
+    if (!removed) {
       return res.status(404).json({ error: 'Staff member not found' });
     }
 
-    staffRegistry.staff.splice(index, 1);
     res.json({ success: true });
   } catch (error) {
     console.error('DELETE /api/staff/:staffId', error);
@@ -864,66 +815,129 @@ app.delete('/api/staff/:staffId', validateAuthenticatedSession, async (req, res)
   }
 });
 
-// Get commissions for a period (with role-based access)
-app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
+// One-time bootstrap: the first authenticated user can claim the manager role
+// while no manager exists yet. After that, admin management happens via the
+// Staff Management UI.
+app.post('/api/staff/claim-admin', validateAuthenticatedSession, async (req, res) => {
   try {
-    const user = getCurrentUser(req, res);
-    const isUserManager = isManager(user);
+    const user = await getCurrentUser(req, res);
+    if (!user?.shopifyUserId) {
+      return res.status(400).json({ error: 'Could not identify your Shopify account from this session.' });
+    }
+    if (await staffStore.hasManager()) {
+      return res.status(409).json({ error: 'An admin has already been set up for this app. Ask them to add you as staff.' });
+    }
+
+    const { name } = req.body || {};
+    const record = await staffStore.upsert({
+      id: `staff_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: name || 'Admin',
+      email: '',
+      commissionTier: 0,
+      role: 'manager',
+      shopifyUserId: user.shopifyUserId,
+      createdAt: new Date().toISOString(),
+    });
+
+    res.json({ staff: record });
+  } catch (error) {
+    console.error('POST /api/staff/claim-admin', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Lightweight endpoint for the frontend to check role + whether admin bootstrap is needed
+app.get('/api/session-info', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const isUserManager = await isManager(user);
+    const hasAnyManager = await staffStore.hasManager();
+    res.json({ isManager: isUserManager, hasAnyManager, shop: user?.shop || null });
+  } catch (error) {
+    console.error('GET /api/session-info', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Assign (or clear) which staff member is responsible for a company (managers only)
+app.post('/api/companies/:companyId/assignment', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    if (!(await isManager(user))) {
+      return res.status(403).json({ error: 'Only managers can assign staff to companies' });
+    }
+
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
-    // Fetch all companies with their assignments and revenue
+    const { companyId } = req.params;
+    const { staffId } = req.body;
+
+    let assignedStaff = null;
+    if (staffId) {
+      const staffRecord = await staffStore.findById(staffId);
+      if (!staffRecord) return res.status(400).json({ error: 'Unknown staff member' });
+      assignedStaff = { staffId: staffRecord.id, name: staffRecord.name, email: staffRecord.email };
+    }
+
+    await setCompanyMetafield(client, companyId, 'assigned_staff', JSON.stringify(assignedStaff));
+
+    res.json({ success: true, assignedStaff });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('POST /api/companies/:companyId/assignment', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get commissions for a period (with role-based access)
+app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const isUserManager = await isManager(user);
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    // Fetch all companies with their app-owned rep assignment and revenue
     const companies = await fetchAllCompanies(client);
 
     // Build commission data by staff
     const commissionsMap = {};
 
     for (const company of companies) {
-      if (!company.locations || !company.locations.edges) continue;
+      const assigned = company.assignedStaff;
+      if (!assigned?.staffId) continue;
 
-      for (const locationEdge of company.locations.edges) {
-        const location = locationEdge.node;
-        if (!location.staffMemberAssignments || !location.staffMemberAssignments.edges) continue;
+      const staffRecord = await staffStore.findById(assigned.staffId);
+      if (!staffRecord) continue;
 
-        for (const assignmentEdge of location.staffMemberAssignments.edges) {
-          const assignment = assignmentEdge.node;
-          const staffMember = assignment.staffMember;
-          if (!staffMember) continue;
-
-          const staffName = `${staffMember.firstName || ''} ${staffMember.lastName || ''}`.trim();
-          const staffEmail = staffMember.email || `rep_${staffMember.id}`;
-
-          // Find commission tier for this staff member
-          const staffRecord = getStaffByEmail(staffEmail);
-          const commissionTier = staffRecord?.commissionTier || 5; // Default to 5% if not configured
-
-          if (!commissionsMap[staffEmail]) {
-            commissionsMap[staffEmail] = {
-              staffId: staffRecord?.id,
-              name: staffRecord?.name || staffName,
-              email: staffEmail,
-              commissionTier,
-              companies: [],
-              totalRevenue: 0,
-              totalCommission: 0
-            };
-          }
-
-          const revenue = company.performance?.totalSpend || 0;
-          const commission = (revenue * commissionTier) / 100;
-
-          commissionsMap[staffEmail].companies.push({
-            companyId: company.id,
-            companyName: company.name,
-            revenue,
-            commission,
-            lastOrderDate: company.performance?.lastOrderDate
-          });
-
-          commissionsMap[staffEmail].totalRevenue += revenue;
-          commissionsMap[staffEmail].totalCommission += commission;
-        }
+      if (!commissionsMap[staffRecord.id]) {
+        commissionsMap[staffRecord.id] = {
+          staffId: staffRecord.id,
+          name: staffRecord.name,
+          email: staffRecord.email,
+          commissionTier: staffRecord.commissionTier,
+          companies: [],
+          totalRevenue: 0,
+          totalCommission: 0
+        };
       }
+
+      const revenue = company.performance?.totalSpend || 0;
+      const commission = (revenue * staffRecord.commissionTier) / 100;
+
+      commissionsMap[staffRecord.id].companies.push({
+        companyId: company.id,
+        companyName: company.name,
+        revenue,
+        commission,
+        lastOrderDate: company.performance?.lastOrderDate
+      });
+
+      commissionsMap[staffRecord.id].totalRevenue += revenue;
+      commissionsMap[staffRecord.id].totalCommission += commission;
     }
 
     let commissions = Object.values(commissionsMap);
@@ -931,7 +945,8 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
     // Apply role-based filtering
     if (!isUserManager) {
       // Reps can only see their own commissions
-      commissions = commissions.filter(c => c.email === user.email);
+      const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+      commissions = ownStaff ? commissions.filter(c => c.staffId === ownStaff.id) : [];
     }
 
     // Sort by total commission descending
@@ -952,71 +967,59 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
 });
 
 // Get single rep's commission details (with privacy check)
-app.get('/api/commissions/:staffEmail', validateAuthenticatedSession, async (req, res) => {
+app.get('/api/commissions/:staffId', validateAuthenticatedSession, async (req, res) => {
   try {
-    const user = getCurrentUser(req, res);
-    const isUserManager = isManager(user);
-    const { staffEmail } = req.params;
+    const user = await getCurrentUser(req, res);
+    const isUserManager = await isManager(user);
+    const { staffId } = req.params;
 
     // Privacy check: reps can only see their own, managers can see all
-    if (!isUserManager && user.email !== staffEmail) {
-      return res.status(403).json({ error: 'You can only view your own commissions' });
+    if (!isUserManager) {
+      const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+      if (!ownStaff || ownStaff.id !== staffId) {
+        return res.status(403).json({ error: 'You can only view your own commissions' });
+      }
+    }
+
+    const staffRecord = await staffStore.findById(staffId);
+    if (!staffRecord) {
+      return res.status(404).json({ error: 'Staff member not found' });
     }
 
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
     const companies = await fetchAllCompanies(client);
-    let repCommissions = null;
+    const repCommissions = {
+      staffId: staffRecord.id,
+      name: staffRecord.name,
+      email: staffRecord.email,
+      commissionTier: staffRecord.commissionTier,
+      companies: [],
+      totalRevenue: 0,
+      totalCommission: 0
+    };
 
     for (const company of companies) {
-      if (!company.locations || !company.locations.edges) continue;
+      if (company.assignedStaff?.staffId !== staffId) continue;
 
-      for (const locationEdge of company.locations.edges) {
-        const location = locationEdge.node;
-        if (!location.staffMemberAssignments || !location.staffMemberAssignments.edges) continue;
+      const revenue = company.performance?.totalSpend || 0;
+      const commission = (revenue * repCommissions.commissionTier) / 100;
 
-        for (const assignmentEdge of location.staffMemberAssignments.edges) {
-          const assignment = assignmentEdge.node;
-          const staffMember = assignment.staffMember;
-          if (!staffMember) continue;
+      repCommissions.companies.push({
+        companyId: company.id,
+        companyName: company.name,
+        revenue,
+        commission,
+        lastOrderDate: company.performance?.lastOrderDate,
+        daysSinceLastOrder: company.performance?.daysSinceLastOrder
+      });
 
-          const currentEmail = staffMember.email || `rep_${staffMember.id}`;
-          if (currentEmail !== staffEmail) continue;
-
-          if (!repCommissions) {
-            const staffRecord = getStaffByEmail(staffEmail);
-            const commissionTier = staffRecord?.commissionTier || 5;
-            repCommissions = {
-              staffId: staffRecord?.id,
-              name: staffRecord?.name || `${staffMember.firstName || ''} ${staffMember.lastName || ''}`.trim(),
-              email: staffEmail,
-              commissionTier,
-              companies: [],
-              totalRevenue: 0,
-              totalCommission: 0
-            };
-          }
-
-          const revenue = company.performance?.totalSpend || 0;
-          const commission = (revenue * repCommissions.commissionTier) / 100;
-
-          repCommissions.companies.push({
-            companyId: company.id,
-            companyName: company.name,
-            revenue,
-            commission,
-            lastOrderDate: company.performance?.lastOrderDate,
-            daysSinceLastOrder: company.performance?.daysSinceLastOrder
-          });
-
-          repCommissions.totalRevenue += revenue;
-          repCommissions.totalCommission += commission;
-        }
-      }
+      repCommissions.totalRevenue += revenue;
+      repCommissions.totalCommission += commission;
     }
 
-    if (!repCommissions) {
+    if (repCommissions.companies.length === 0) {
       return res.status(404).json({ error: 'No commissions found for this staff member' });
     }
 
@@ -1025,7 +1028,7 @@ app.get('/api/commissions/:staffEmail', validateAuthenticatedSession, async (req
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
       return sendShopifyApiError(res, error);
     }
-    console.error('GET /api/commissions/:staffEmail', error);
+    console.error('GET /api/commissions/:staffId', error);
     res.status(500).json({ error: error.message });
   }
 });
