@@ -337,6 +337,15 @@ const throwIfGraphqlErrors = (response, label) => {
   }
 };
 
+function decodeRouteParam(value) {
+  if (!value || typeof value !== 'string') return value;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 // Lightweight single-company read, used only to check the current assignment
 // before allowing a rep to self-assign/release (avoids re-fetching every
 // company + its orders just to authorize one write).
@@ -466,7 +475,7 @@ const fetchAllCompanies = async (client) => {
             ordersCount {
               count
             }
-            recentOrders: orders(first: 25, sortKey: CREATED_AT, reverse: true) {
+            recentOrders: orders(first: 10, sortKey: CREATED_AT, reverse: true) {
               edges {
                 node {
                   createdAt
@@ -479,21 +488,6 @@ const fetchAllCompanies = async (client) => {
             assignedStaffMetafield: metafield(namespace: "clnf", key: "assigned_staff") {
               value
             }
-            locations(first: 10) {
-              edges {
-                node {
-                  id
-                  name
-                  shippingAddress {
-                    address1
-                    city
-                    province
-                    country
-                    zip
-                  }
-                }
-              }
-            }
           }
         }
         pageInfo {
@@ -505,9 +499,6 @@ const fetchAllCompanies = async (client) => {
   `;
 
   const enrichCompany = (company) => {
-    if (company.locations == null) {
-      company.locations = { edges: [] };
-    }
 
     const totalSpend = parseFloat(company.totalSpent?.amount || '0') || 0;
     const orderCount = company.ordersCount?.count || 0;
@@ -599,7 +590,7 @@ app.get('/api/companies/:companyId/notes', validateAuthenticatedSession, async (
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
-    const { companyId } = req.params;
+    const companyId = decodeRouteParam(req.params.companyId);
     const query = `
       query getCompanyNotes($id: ID!) {
         company(id: $id) {
@@ -615,6 +606,10 @@ app.get('/api/companies/:companyId/notes', validateAuthenticatedSession, async (
       data: { query, variables: { id: companyId } },
     });
     throwIfGraphqlErrors(response, 'company notes');
+
+    if (!response.body?.data?.company) {
+      return res.json({ notes: [] });
+    }
 
     let notes = [];
     const metafield = response.body?.data?.company?.metafield;
@@ -643,7 +638,7 @@ app.post('/api/companies/:companyId/notes', validateAuthenticatedSession, async 
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
-    const { companyId } = req.params;
+    const companyId = decodeRouteParam(req.params.companyId);
     const { body, author } = req.body;
 
     if (!body || !author) {
@@ -706,7 +701,8 @@ app.delete('/api/companies/:companyId/notes/:noteId', validateAuthenticatedSessi
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
-    const { companyId, noteId } = req.params;
+    const companyId = decodeRouteParam(req.params.companyId);
+    const noteId = decodeRouteParam(req.params.noteId);
 
     // Fetch existing notes
     const getQuery = `
@@ -928,7 +924,7 @@ app.post('/api/companies/:companyId/assignment', validateAuthenticatedSession, a
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
-    const { companyId } = req.params;
+    const companyId = decodeRouteParam(req.params.companyId);
     const { staffId } = req.body;
 
     let assignedStaff = null;
@@ -1154,6 +1150,11 @@ app.get('/api/locations', validateAuthenticatedSession, async (req, res) => {
       pageInfo: { hasNextPage: false }
     });
   } catch (error) {
+    const message = formatShopifyClientError(error);
+    if (/ACCESS_DENIED|Access denied for metaobjects|UndefinedObject/i.test(message)) {
+      console.warn('GET /api/locations:', message);
+      return res.json({ edges: [], pageInfo: { hasNextPage: false }, warning: message });
+    }
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
       return sendShopifyApiError(res, error);
     }

@@ -105,12 +105,15 @@
                     <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 text-sm">search</span>
                     <input id="company-search" type="text" placeholder="Search by company name..." class="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none transition-all" onkeyup="onCompanySearchInput()"/>
                 </div>
-                <div class="flex flex-wrap gap-2">
+                <div class="flex flex-wrap items-center gap-2">
                     <button onclick="setFilter('all')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-[#008060] text-white" data-filter="all">All Companies</button>
                     <button onclick="setFilter('30')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="30">Last 30 Days</button>
                     <button onclick="setFilter('89')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="89">31-89 Days</button>
                     <button onclick="setFilter('90')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="90">90+ Days</button>
                     <button onclick="setFilter('never')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="never">Never Ordered</button>
+                    <span class="text-xs text-zinc-400 ml-2 hidden sm:inline">Sort</span>
+                    <button type="button" onclick="setSort('stale')" class="sort-btn px-3 py-1 rounded-md text-sm font-medium bg-[#008060] text-white" data-sort="stale">Longest since order</button>
+                    <button type="button" onclick="setSort('recent')" class="sort-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-sort="recent">Most recent order</button>
                 </div>
             </div>
         </div>
@@ -331,6 +334,7 @@
     let markers = [];
     let currentTab = 'customers';
     let currentFilter = 'all';
+    let currentSort = 'stale';
     let selectedCompanyId = null;
     let toastHideTimer = null;
 
@@ -452,6 +456,37 @@
         renderCustomers();
     }
 
+    function setSort(sort) {
+        currentSort = sort;
+        document.querySelectorAll('.sort-btn').forEach(btn => {
+            const isActive = btn.dataset.sort === sort;
+            btn.classList.toggle('bg-[#008060]', isActive);
+            btn.classList.toggle('text-white', isActive);
+            btn.classList.toggle('bg-zinc-200', !isActive);
+            btn.classList.toggle('text-zinc-900', !isActive);
+        });
+        paginationState.companies.page = 1;
+        renderCustomers();
+    }
+
+    function daysSinceSortValue(company) {
+        const days = company.performance?.daysSinceLastOrder;
+        return days == null ? Number.POSITIVE_INFINITY : days;
+    }
+
+    async function readApiError(res, fallback) {
+        try {
+            const data = await res.json();
+            return data?.error || fallback;
+        } catch {
+            return fallback;
+        }
+    }
+
+    function companyApiUrl(companyId, suffix = '') {
+        return apiUrl(`/api/companies/${encodeURIComponent(companyId)}${suffix}`);
+    }
+
     function onCompanySearchInput() {
         paginationState.companies.page = 1;
         renderCustomers();
@@ -476,26 +511,33 @@
                 window.shopifyApiFetch(apiUrl('/api/locations'))
             ]);
 
-            if (!companiesRes.ok) throw new Error('Failed to load companies');
-            if (!locationsRes.ok) throw new Error('Failed to load locations');
+            if (!companiesRes.ok) {
+                throw new Error(await readApiError(companiesRes, 'Failed to load companies'));
+            }
 
             const companiesData = await companiesRes.json();
-            const locationsData = await locationsRes.json();
-
             companies = (companiesData.edges || []).map(e => e.node);
 
-            locations = (locationsData.edges || []).map(e => {
-                const fields = {};
-                e.node.fields.forEach(f => fields[f.key] = f.value);
-                return {
-                    id: e.node.id,
-                    handle: e.node.handle,
-                    ...fields
-                };
-            });
+            if (locationsRes.ok) {
+                const locationsData = await locationsRes.json();
+                locations = (locationsData.edges || []).map(e => {
+                    const fields = {};
+                    (e.node?.fields || []).forEach(f => { fields[f.key] = f.value; });
+                    return {
+                        id: e.node.id,
+                        handle: e.node.handle,
+                        ...fields
+                    };
+                });
+            } else {
+                locations = [];
+                const locError = await readApiError(locationsRes, 'Failed to load map locations');
+                console.warn(locError);
+            }
 
             renderCustomers();
             renderSummary();
+            if (map) updateMarkers();
         } catch (e) {
             console.error(e);
             showError(e.message);
@@ -558,6 +600,11 @@
             const matchesSearch = (c.name || '').toLowerCase().includes(search);
             const matchesFilter = shouldShowCompany(c);
             return matchesSearch && matchesFilter;
+        }).sort((a, b) => {
+            const da = daysSinceSortValue(a);
+            const db = daysSinceSortValue(b);
+            if (da !== db) return currentSort === 'stale' ? db - da : da - db;
+            return (a.name || '').localeCompare(b.name || '');
         });
 
         const pageItems = paginate(filtered, paginationState.companies, 'companies-pagination', 'goToCompanyPage', 'setCompanyPageSize');
@@ -646,8 +693,8 @@
         document.getElementById('notes-drawer').classList.add('active');
 
         try {
-            const res = await window.shopifyApiFetch(apiUrl(`/api/companies/${companyId}/notes`));
-            if (!res.ok) throw new Error('Failed to load notes');
+            const res = await window.shopifyApiFetch(companyApiUrl(companyId, '/notes'));
+            if (!res.ok) throw new Error(await readApiError(res, 'Failed to load notes'));
             const data = await res.json();
             renderNotes(data.notes || []);
         } catch (e) {
@@ -657,7 +704,7 @@
 
     async function assignRep(companyId, staffId) {
         try {
-            const res = await window.shopifyApiFetch(apiUrl(`/api/companies/${companyId}/assignment`), {
+            const res = await window.shopifyApiFetch(companyApiUrl(companyId, '/assignment'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ staffId: staffId || null })
@@ -704,18 +751,18 @@
         }
 
         try {
-            const res = await window.shopifyApiFetch(apiUrl(`/api/companies/${selectedCompanyId}/notes`), {
+            const res = await window.shopifyApiFetch(companyApiUrl(selectedCompanyId, '/notes'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ body, author: 'Sales Team' })
             });
-            if (!res.ok) throw new Error('Failed to save note');
+            if (!res.ok) throw new Error(await readApiError(res, 'Failed to save note'));
 
             showToast('Note saved', 'success');
             document.getElementById('note-input').value = '';
 
             // Reload notes
-            const notesRes = await window.shopifyApiFetch(apiUrl(`/api/companies/${selectedCompanyId}/notes`));
+            const notesRes = await window.shopifyApiFetch(companyApiUrl(selectedCompanyId, '/notes'));
             if (notesRes.ok) {
                 const data = await notesRes.json();
                 renderNotes(data.notes || []);
@@ -732,15 +779,15 @@
         if (!confirm('Delete this note?')) return;
 
         try {
-            const res = await window.shopifyApiFetch(apiUrl(`/api/companies/${selectedCompanyId}/notes/${noteId}`), {
+            const res = await window.shopifyApiFetch(companyApiUrl(selectedCompanyId, `/notes/${encodeURIComponent(noteId)}`), {
                 method: 'DELETE'
             });
-            if (!res.ok) throw new Error('Failed to delete note');
+            if (!res.ok) throw new Error(await readApiError(res, 'Failed to delete note'));
 
             showToast('Note deleted', 'success');
 
             // Reload notes
-            const notesRes = await window.shopifyApiFetch(apiUrl(`/api/companies/${selectedCompanyId}/notes`));
+            const notesRes = await window.shopifyApiFetch(companyApiUrl(selectedCompanyId, '/notes'));
             if (notesRes.ok) {
                 const data = await notesRes.json();
                 renderNotes(data.notes || []);
@@ -1157,12 +1204,13 @@
             try {
                 data = raw ? JSON.parse(raw) : null;
             } catch {
-                if (res.status === 504) throw new Error('Sync timed out. Re-run sync or raise function maxDuration.');
+                if (res.status === 504) throw new Error('Sync timed out on the host. Click Run Map Sync again — already-geocoded locations are skipped.');
                 throw new Error((raw || `HTTP ${res.status}`).slice(0, 180));
             }
             if (!res.ok) throw new Error(data?.error || 'Sync failed');
-            const incompleteNote = data.incomplete ? ' (partial — run again to continue)' : '';
-            showToast(`Sync Complete! Created: ${data.created}, Updated: ${data.updated}${incompleteNote}`, 'success');
+            const incompleteNote = data.incomplete ? ' Partial run — click Run Map Sync again to continue.' : '';
+            const skipNote = data.skipped ? `, skipped: ${data.skipped}` : '';
+            showToast(`Sync complete. Created: ${data.created || 0}, updated: ${data.updated || 0}${skipNote}.${incompleteNote}`, 'success');
             await loadData();
         } catch (e) {
             showError('Sync failed: ' + e.message);
