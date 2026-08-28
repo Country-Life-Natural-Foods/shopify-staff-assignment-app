@@ -337,6 +337,31 @@ const throwIfGraphqlErrors = (response, label) => {
   }
 };
 
+// Lightweight single-company read, used only to check the current assignment
+// before allowing a rep to self-assign/release (avoids re-fetching every
+// company + its orders just to authorize one write).
+const getCompanyAssignedStaffId = async (client, companyId) => {
+  const query = `
+    query getCompanyAssignment($id: ID!) {
+      company(id: $id) {
+        id
+        metafield(namespace: "clnf", key: "assigned_staff") {
+          value
+        }
+      }
+    }
+  `;
+  const response = await client.query({ data: { query, variables: { id: companyId } } });
+  throwIfGraphqlErrors(response, 'fetch company assignment');
+  const value = response.body?.data?.company?.metafield?.value;
+  if (!value) return null;
+  try {
+    return JSON.parse(value)?.staffId || null;
+  } catch (e) {
+    return null;
+  }
+};
+
 // Metafields are written via the resource-agnostic metafieldsSet mutation.
 // (companyUpdate's CompanyInput no longer accepts an `id` or `metafields` field.)
 const setCompanyMetafield = async (client, companyId, key, value) => {
@@ -859,14 +884,13 @@ app.get('/api/session-info', validateAuthenticatedSession, async (req, res) => {
   }
 });
 
-// Assign (or clear) which staff member is responsible for a company (managers only)
+// Assign (or clear) which staff member is responsible for a company.
+// Managers can assign/reassign anyone. Reps can only claim an unassigned
+// company for themselves, or release their own assignment.
 app.post('/api/companies/:companyId/assignment', validateAuthenticatedSession, async (req, res) => {
   try {
     const user = await getCurrentUser(req, res);
-    if (!(await isManager(user))) {
-      return res.status(403).json({ error: 'Only managers can assign staff to companies' });
-    }
-
+    const isUserManager = await isManager(user);
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -878,6 +902,21 @@ app.post('/api/companies/:companyId/assignment', validateAuthenticatedSession, a
       const staffRecord = await staffStore.findById(staffId);
       if (!staffRecord) return res.status(400).json({ error: 'Unknown staff member' });
       assignedStaff = { staffId: staffRecord.id, name: staffRecord.name, email: staffRecord.email };
+    }
+
+    if (!isUserManager) {
+      const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+      if (!ownStaff) {
+        return res.status(403).json({ error: 'Ask a manager to add you as staff before you can assign yourself to companies' });
+      }
+      if (staffId && staffId !== ownStaff.id) {
+        return res.status(403).json({ error: 'You can only assign yourself' });
+      }
+
+      const currentlyAssignedId = await getCompanyAssignedStaffId(client, companyId);
+      if (currentlyAssignedId && currentlyAssignedId !== ownStaff.id) {
+        return res.status(403).json({ error: 'This company is already assigned to another rep. Ask a manager to reassign it.' });
+      }
     }
 
     await setCompanyMetafield(client, companyId, 'assigned_staff', JSON.stringify(assignedStaff));

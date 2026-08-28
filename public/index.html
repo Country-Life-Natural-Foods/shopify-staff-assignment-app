@@ -435,6 +435,30 @@
         return true;
     }
 
+    function renderAssignedRepCell(c) {
+        if (isManagerGlobal) {
+            return `<select onclick="event.stopPropagation()" onchange="event.stopPropagation(); assignRep('${c.id}', this.value)" class="border border-zinc-200 rounded px-1 py-0.5 text-xs">
+                        <option value="">Unassigned</option>
+                        ${staffList.map(s => `<option value="${s.id}" ${c.assignedStaff?.staffId === s.id ? 'selected' : ''}>${s.name}</option>`).join('')}
+                    </select>`;
+        }
+
+        const myStaffId = staffList[0]?.id || null;
+        if (!myStaffId) {
+            return `<span class="text-zinc-400 italic">Ask a manager to add you as staff first</span>`;
+        }
+
+        const assignedId = c.assignedStaff?.staffId;
+        if (!assignedId) {
+            return `<button onclick="event.stopPropagation(); assignRep('${c.id}', '${myStaffId}')" class="text-[#008060] underline text-xs font-medium">Claim this company</button>`;
+        }
+        if (assignedId === myStaffId) {
+            return `<span class="font-medium text-zinc-900">${c.assignedStaff.name} (you)</span>
+                    <button onclick="event.stopPropagation(); assignRep('${c.id}', '')" class="text-red-500 underline text-xs">Release</button>`;
+        }
+        return `<span class="font-medium text-zinc-900">${c.assignedStaff.name}</span>`;
+    }
+
     function renderCustomers() {
         const search = document.getElementById('company-search').value.toLowerCase();
         const filtered = companies.filter(c => {
@@ -452,12 +476,7 @@
             const lastOrder = perf.lastOrderDate ? new Date(perf.lastOrderDate).toLocaleDateString() : '-';
             const avgGap = perf.avgDaysBetweenOrders || '-';
             const notes = c.notes || [];
-            const assignedRepCell = isManagerGlobal
-                ? `<select onclick="event.stopPropagation()" onchange="event.stopPropagation(); assignRep('${c.id}', this.value)" class="border border-zinc-200 rounded px-1 py-0.5 text-xs">
-                        <option value="">Unassigned</option>
-                        ${staffList.map(s => `<option value="${s.id}" ${c.assignedStaff?.staffId === s.id ? 'selected' : ''}>${s.name}</option>`).join('')}
-                   </select>`
-                : `<span class="font-medium text-zinc-900">${c.assignedStaff?.name || 'Unassigned'}</span>`;
+            const assignedRepCell = renderAssignedRepCell(c);
 
             return `
                 <div class="p-4 border-b border-zinc-100 last:border-0 hover:bg-zinc-50 transition-colors cursor-pointer" onclick="openNotes('${c.id}', '${c.name.replace(/'/g, "\\'")}')">
@@ -517,11 +536,12 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ staffId: staffId || null })
             });
-            if (!res.ok) throw new Error('Failed to update assignment');
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(data?.error || 'Failed to update assignment');
             showToast('Assignment updated', 'success');
             await loadData();
         } catch (e) {
-            showError('Failed to update assignment: ' + e.message);
+            showError(e.message);
         }
     }
 
