@@ -405,6 +405,23 @@ const setCompanyMetafield = async (client, companyId, key, value) => {
   }
 };
 
+// Runs `fn` over `items` with at most `limit` in flight at once. Used to fetch
+// per-company order history concurrently instead of one company at a time,
+// which was slow enough to feel like a hang on stores with many companies.
+const mapWithConcurrency = async (items, limit, fn) => {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      const current = nextIndex++;
+      results[current] = await fn(items[current], current);
+    }
+  };
+  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);
+  await Promise.all(workers);
+  return results;
+};
+
 // Helper: calculate days between orders and stats
 const calculateOrderStats = (orderDates) => {
   if (!orderDates || orderDates.length === 0) {
@@ -473,6 +490,93 @@ const fetchAllCompanies = async (client) => {
     }
   `;
 
+  const ordersQuery = `
+    query getCompanyOrders($query: String!) {
+      orders(first: 25, query: $query, sortKey: CREATED_AT, reverse: true) {
+        edges {
+          node {
+            totalPriceSet {
+              shopMoney {
+                amount
+              }
+            }
+            createdAt
+          }
+        }
+      }
+    }
+  `;
+
+  // Fetch one company's orders + derived performance/notes/assignment fields.
+  const enrichCompany = async (company) => {
+    if (company.locations == null) {
+      company.locations = { edges: [] };
+    }
+
+    let totalSpend = 0;
+    let orderCount = 0;
+    let orderDates = [];
+    try {
+      const ordersResponse = await client.query({
+        data: {
+          query: ordersQuery,
+          variables: { query: `company_id:${company.id.split('/').pop()}` }
+        }
+      });
+      throwIfGraphqlErrors(ordersResponse, 'orders');
+      const orderEdges = ordersResponse.body?.data?.orders?.edges;
+      const orders = orderEdges ? orderEdges.map((e) => e.node) : [];
+      totalSpend = orders.reduce((sum, order) => {
+        const amt = order?.totalPriceSet?.shopMoney?.amount;
+        return sum + (amt != null ? parseFloat(amt) : 0);
+      }, 0);
+      orderCount = orders.length;
+      orderDates = orders.map(o => o.createdAt);
+    } catch (orderErr) {
+      console.warn('orders for company', company.id, orderErr.message);
+    }
+
+    const orderStats = calculateOrderStats(orderDates);
+
+    // Parse notes from metafield
+    let notes = [];
+    try {
+      const notesValue = company.metafield?.value;
+      if (notesValue) {
+        notes = JSON.parse(notesValue);
+        if (!Array.isArray(notes)) notes = [];
+      }
+    } catch (e) {
+      console.warn('Failed to parse notes for company', company.id, e.message);
+    }
+
+    // Parse assigned rep from metafield (app-owned; Shopify's native staff
+    // assignments require the protected read_users scope, which this app doesn't have)
+    let assignedStaff = null;
+    try {
+      const assignedValue = company.assignedStaffMetafield?.value;
+      if (assignedValue) {
+        assignedStaff = JSON.parse(assignedValue);
+      }
+    } catch (e) {
+      console.warn('Failed to parse assigned staff for company', company.id, e.message);
+    }
+
+    company.performance = {
+      totalSpend,
+      orderCount,
+      lastOrderDate: orderStats.lastOrderDate,
+      daysSinceLastOrder: orderStats.daysSinceLastOrder,
+      avgDaysBetweenOrders: orderStats.avgDaysBetweenOrders,
+      avgOrderValue: orderCount > 0 ? totalSpend / orderCount : 0
+    };
+
+    company.notes = notes;
+    company.assignedStaff = assignedStaff;
+
+    return company;
+  };
+
   let hasNextPage = true;
   let cursor = null;
   const all = [];
@@ -489,93 +593,10 @@ const fetchAllCompanies = async (client) => {
     const edges = companiesData.edges || [];
     const pageInfo = companiesData.pageInfo || { hasNextPage: false, endCursor: null };
 
-    // For each company, fetch orders to calculate performance
-    for (const edge of edges) {
-      const company = edge.node;
-      if (company.locations == null) {
-        company.locations = { edges: [] };
-      }
-
-      let totalSpend = 0;
-      let orderCount = 0;
-      let orderDates = [];
-      try {
-        const ordersQuery = `
-        query getCompanyOrders($query: String!) {
-          orders(first: 25, query: $query, sortKey: CREATED_AT, reverse: true) {
-            edges {
-              node {
-                totalPriceSet {
-                  shopMoney {
-                    amount
-                  }
-                }
-                createdAt
-              }
-            }
-          }
-        }
-      `;
-
-        const ordersResponse = await client.query({
-          data: {
-            query: ordersQuery,
-            variables: { query: `company_id:${company.id.split('/').pop()}` }
-          }
-        });
-        throwIfGraphqlErrors(ordersResponse, 'orders');
-        const orderEdges = ordersResponse.body?.data?.orders?.edges;
-        const orders = orderEdges ? orderEdges.map((e) => e.node) : [];
-        totalSpend = orders.reduce((sum, order) => {
-          const amt = order?.totalPriceSet?.shopMoney?.amount;
-          return sum + (amt != null ? parseFloat(amt) : 0);
-        }, 0);
-        orderCount = orders.length;
-        orderDates = orders.map(o => o.createdAt);
-      } catch (orderErr) {
-        console.warn('orders for company', company.id, orderErr.message);
-      }
-
-      const orderStats = calculateOrderStats(orderDates);
-
-      // Parse notes from metafield
-      let notes = [];
-      try {
-        const notesValue = company.metafield?.value;
-        if (notesValue) {
-          notes = JSON.parse(notesValue);
-          if (!Array.isArray(notes)) notes = [];
-        }
-      } catch (e) {
-        console.warn('Failed to parse notes for company', company.id, e.message);
-      }
-
-      // Parse assigned rep from metafield (app-owned; Shopify's native staff
-      // assignments require the protected read_users scope, which this app doesn't have)
-      let assignedStaff = null;
-      try {
-        const assignedValue = company.assignedStaffMetafield?.value;
-        if (assignedValue) {
-          assignedStaff = JSON.parse(assignedValue);
-        }
-      } catch (e) {
-        console.warn('Failed to parse assigned staff for company', company.id, e.message);
-      }
-
-      company.performance = {
-        totalSpend,
-        orderCount,
-        lastOrderDate: orderStats.lastOrderDate,
-        daysSinceLastOrder: orderStats.daysSinceLastOrder,
-        avgDaysBetweenOrders: orderStats.avgDaysBetweenOrders,
-        avgOrderValue: orderCount > 0 ? totalSpend / orderCount : 0
-      };
-
-      company.notes = notes;
-      company.assignedStaff = assignedStaff;
-
-      all.push(company);
-    }
+    // Enrich this page's companies with orders/performance concurrently (bounded,
+    // to stay well within Shopify's GraphQL rate limit) instead of one at a time.
+    const enriched = await mapWithConcurrency(edges, 5, (edge) => enrichCompany(edge.node));
+    all.push(...enriched);
 
     hasNextPage = Boolean(pageInfo.hasNextPage);
     cursor = pageInfo.endCursor || null;
