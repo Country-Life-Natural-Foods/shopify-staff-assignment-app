@@ -55,12 +55,20 @@
 
 <!-- Tabs -->
 <div class="border-b border-zinc-200 bg-white sticky top-16 z-30">
-    <div class="flex px-4 md:px-6">
-        <button id="tab-customers" onclick="switchTab('customers')" class="px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 border-transparent hover:border-zinc-300 transition-colors tab-active">
+    <div class="flex px-4 md:px-6 overflow-x-auto">
+        <button id="tab-customers" onclick="switchTab('customers')" class="px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 border-transparent hover:border-zinc-300 transition-colors tab-active whitespace-nowrap">
             <span class="material-symbols-outlined text-sm">people</span>
             Customers
         </button>
-        <button id="tab-map" onclick="switchTab('map')" class="px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 border-transparent hover:border-zinc-300 transition-colors">
+        <button id="tab-commissions" onclick="switchTab('commissions')" class="px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 border-transparent hover:border-zinc-300 transition-colors whitespace-nowrap">
+            <span class="material-symbols-outlined text-sm">paid</span>
+            Commissions
+        </button>
+        <button id="tab-staff" onclick="switchTab('staff')" class="px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 border-transparent hover:border-zinc-300 transition-colors manager-only whitespace-nowrap" style="display:none;">
+            <span class="material-symbols-outlined text-sm">manage_accounts</span>
+            Staff Management
+        </button>
+        <button id="tab-map" onclick="switchTab('map')" class="px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 border-transparent hover:border-zinc-300 transition-colors whitespace-nowrap">
             <span class="material-symbols-outlined text-sm">map</span>
             Map
         </button>
@@ -175,6 +183,97 @@
         </div>
     </div>
 
+    <!-- Commissions Tab -->
+    <div id="commissions-view" class="hidden flex-1 flex flex-col overflow-hidden w-full">
+        <div class="border-b border-zinc-200 bg-white p-4 md:p-6 flex-shrink-0">
+            <div class="max-w-[1600px] mx-auto">
+                <h2 class="text-lg font-bold mb-4">Commission Summary</h2>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-gradient-to-br from-emerald-50 to-green-50 rounded-xl p-5 border border-emerald-200">
+                        <p class="text-sm font-medium text-emerald-600 mb-2">My Total Commission</p>
+                        <h3 class="text-3xl font-bold text-emerald-900" id="my-commission">$0.00</h3>
+                        <p class="text-xs text-emerald-600 mt-2" id="commission-period">Current Month</p>
+                    </div>
+                    <div class="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-5 border border-blue-200">
+                        <p class="text-sm font-medium text-blue-600 mb-2">My Total Revenue</p>
+                        <h3 class="text-3xl font-bold text-blue-900" id="my-revenue">$0.00</h3>
+                        <p class="text-xs text-blue-600 mt-2" id="commission-count">0 Companies</p>
+                    </div>
+                    <div class="bg-gradient-to-br from-violet-50 to-purple-50 rounded-xl p-5 border border-violet-200">
+                        <p class="text-sm font-medium text-violet-600 mb-2">Commission Rate</p>
+                        <h3 class="text-3xl font-bold text-violet-900" id="my-rate">0%</h3>
+                        <p class="text-xs text-violet-600 mt-2">Your Tier</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="flex-1 overflow-y-auto">
+            <div class="max-w-[1600px] mx-auto w-full p-4 md:p-6">
+                <div class="bg-white rounded-xl border border-zinc-200 overflow-hidden" id="commissions-table">
+                    <div class="divide-y divide-zinc-200" id="commissions-list">
+                        <!-- Commissions populated by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Staff Management Tab (Managers Only) -->
+    <div id="staff-view" class="hidden flex-1 flex flex-col overflow-hidden w-full">
+        <div class="border-b border-zinc-200 bg-white p-4 md:p-6 flex-shrink-0">
+            <div class="max-w-[1600px] mx-auto">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-bold">Staff Management</h2>
+                    <button onclick="openAddStaffModal()" class="bg-[#008060] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[#00654b] flex items-center gap-2">
+                        <span class="material-symbols-outlined text-sm">add</span>
+                        Add Staff
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div class="flex-1 overflow-y-auto">
+            <div class="max-w-[1600px] mx-auto w-full p-4 md:p-6">
+                <div class="bg-white rounded-xl border border-zinc-200 overflow-hidden">
+                    <div class="divide-y divide-zinc-200" id="staff-list">
+                        <!-- Staff populated by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add/Edit Staff Modal -->
+    <div id="staff-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg max-w-md w-full p-6 shadow-xl">
+            <h3 class="text-lg font-bold mb-4">Add Staff Member</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-zinc-700 mb-1">Name</label>
+                    <input id="staff-name" type="text" placeholder="John Smith" class="w-full px-3 py-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] outline-none"/>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-zinc-700 mb-1">Email</label>
+                    <input id="staff-email" type="email" placeholder="john@company.com" class="w-full px-3 py-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] outline-none"/>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-zinc-700 mb-1">Commission Tier (%)</label>
+                    <input id="staff-tier" type="number" min="0" max="100" placeholder="5" class="w-full px-3 py-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] outline-none"/>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-zinc-700 mb-1">Role</label>
+                    <select id="staff-role" class="w-full px-3 py-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] outline-none">
+                        <option value="rep">Sales Rep</option>
+                        <option value="manager">Manager</option>
+                    </select>
+                </div>
+            </div>
+            <div class="flex gap-2 mt-6">
+                <button onclick="closeAddStaffModal()" class="flex-1 px-4 py-2 border border-zinc-200 rounded-md text-sm font-medium hover:bg-zinc-50">Cancel</button>
+                <button onclick="saveStaff()" class="flex-1 px-4 py-2 bg-[#008060] text-white rounded-md text-sm font-medium hover:bg-[#00654b]">Save</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Notes Drawer -->
     <div id="notes-drawer" class="notes-drawer fixed right-0 top-0 h-full w-full md:w-96 bg-white shadow-xl z-40 flex flex-col border-l border-zinc-200">
         <div class="p-4 border-b border-zinc-200 flex justify-between items-center flex-shrink-0">
@@ -243,12 +342,20 @@
     function switchTab(tab) {
         currentTab = tab;
         document.getElementById('customers-view').classList.toggle('hidden', tab !== 'customers');
+        document.getElementById('commissions-view').classList.toggle('hidden', tab !== 'commissions');
+        document.getElementById('staff-view').classList.toggle('hidden', tab !== 'staff');
         document.getElementById('map-view').classList.toggle('hidden', tab !== 'map');
         document.getElementById('tab-customers').classList.toggle('tab-active', tab === 'customers');
+        document.getElementById('tab-commissions').classList.toggle('tab-active', tab === 'commissions');
+        document.getElementById('tab-staff').classList.toggle('tab-active', tab === 'staff');
         document.getElementById('tab-map').classList.toggle('tab-active', tab === 'map');
 
         if (tab === 'map' && !map) {
             setTimeout(initMap, 100);
+        } else if (tab === 'commissions') {
+            loadCommissions();
+        } else if (tab === 'staff') {
+            loadStaff();
         }
     }
 
@@ -470,6 +577,186 @@
         }
     }
 
+    let commissionData = null;
+    let staffList = [];
+    let currentUser = null;
+
+    async function loadCommissions() {
+        setLoading(true);
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/commissions'));
+            if (!res.ok) throw new Error('Failed to load commissions');
+            const data = await res.json();
+            commissionData = data;
+            renderCommissions();
+        } catch (e) {
+            showError('Failed to load commissions: ' + e.message);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    function renderCommissions() {
+        if (!commissionData) return;
+
+        const { isManager, commissions } = commissionData;
+
+        // Find current user's commission data for summary cards
+        let myData = null;
+        if (!isManager && commissions && commissions.length > 0) {
+            myData = commissions[0];
+        }
+
+        // Update summary cards
+        const myCommission = myData?.totalCommission || 0;
+        const myRevenue = myData?.totalRevenue || 0;
+        const myRate = myData?.commissionTier || 0;
+        const companyCount = myData?.companies?.length || 0;
+
+        document.getElementById('my-commission').textContent = `$${myCommission.toFixed(2)}`;
+        document.getElementById('my-revenue').textContent = `$${myRevenue.toFixed(2)}`;
+        document.getElementById('my-rate').textContent = `${myRate}%`;
+        document.getElementById('commission-count').textContent = `${companyCount} Companies`;
+
+        // Render commission list
+        const list = document.getElementById('commissions-list');
+        const displayData = commissions || [];
+
+        list.innerHTML = displayData.map(staff => {
+            const commission = staff?.totalCommission || 0;
+            const revenue = staff?.totalRevenue || 0;
+            const tier = staff?.commissionTier || 0;
+
+            return `
+                <div class="p-4 border-b border-zinc-100 last:border-0 hover:bg-zinc-50 transition-colors">
+                    <div class="flex justify-between items-start mb-2">
+                        <div>
+                            <h4 class="font-semibold text-sm text-zinc-900">${staff?.name || 'Unknown'}</h4>
+                            <p class="text-xs text-zinc-500 mt-1">${staff?.email || ''}</p>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-2xl font-bold text-emerald-600">$${commission.toFixed(2)}</p>
+                            <p class="text-xs text-zinc-500 mt-1">${tier}% of $${revenue.toFixed(2)}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('') || '<div class="p-8 text-center text-zinc-500"><p>No commission data available</p></div>';
+    }
+
+    async function loadStaff() {
+        setLoading(true);
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/staff'));
+            if (!res.ok) throw new Error('Failed to load staff');
+            const data = await res.json();
+            staffList = data.staff || [];
+            renderStaff();
+        } catch (e) {
+            showError('Failed to load staff: ' + e.message);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    function renderStaff() {
+        const list = document.getElementById('staff-list');
+        list.innerHTML = staffList.map(staff => {
+            const roleBadge = staff.role === 'manager' ? '<span class="px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-700">Manager</span>' : '<span class="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700">Sales Rep</span>';
+
+            return `
+                <div class="p-4 border-b border-zinc-100 last:border-0 hover:bg-zinc-50 transition-colors">
+                    <div class="flex justify-between items-start mb-2">
+                        <div class="flex-1">
+                            <h4 class="font-semibold text-sm text-zinc-900">${staff.name}</h4>
+                            <p class="text-xs text-zinc-500 mt-1">${staff.email}</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            ${roleBadge}
+                            <button onclick="deleteStaff('${staff.id}')" class="p-1 hover:bg-zinc-200 rounded text-zinc-400 hover:text-zinc-600 transition-colors">
+                                <span class="material-symbols-outlined text-sm">close</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="text-xs text-zinc-600 mt-2">Commission Tier: <span class="font-semibold">${staff.commissionTier}%</span></div>
+                </div>
+            `;
+        }).join('') || '<div class="p-8 text-center text-zinc-500"><p>No staff members</p></div>';
+    }
+
+    function openAddStaffModal() {
+        document.getElementById('staff-modal').classList.remove('hidden');
+        document.getElementById('staff-name').value = '';
+        document.getElementById('staff-email').value = '';
+        document.getElementById('staff-tier').value = '';
+        document.getElementById('staff-role').value = 'rep';
+    }
+
+    function closeAddStaffModal() {
+        document.getElementById('staff-modal').classList.add('hidden');
+    }
+
+    async function saveStaff() {
+        const name = document.getElementById('staff-name').value.trim();
+        const email = document.getElementById('staff-email').value.trim();
+        const tier = parseFloat(document.getElementById('staff-tier').value);
+        const role = document.getElementById('staff-role').value;
+
+        if (!name || !email || isNaN(tier)) {
+            showError('Please fill in all fields');
+            return;
+        }
+
+        if (tier < 0 || tier > 100) {
+            showError('Commission tier must be between 0 and 100');
+            return;
+        }
+
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/staff'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, email, commissionTier: tier, role })
+            });
+            if (!res.ok) throw new Error('Failed to save staff');
+
+            showToast('Staff member saved', 'success');
+            closeAddStaffModal();
+            await loadStaff();
+        } catch (e) {
+            showError('Failed to save staff: ' + e.message);
+        }
+    }
+
+    async function deleteStaff(staffId) {
+        if (!confirm('Delete this staff member?')) return;
+
+        try {
+            const res = await window.shopifyApiFetch(apiUrl(`/api/staff/${staffId}`), {
+                method: 'DELETE'
+            });
+            if (!res.ok) throw new Error('Failed to delete staff');
+
+            showToast('Staff member deleted', 'success');
+            await loadStaff();
+        } catch (e) {
+            showError('Failed to delete staff: ' + e.message);
+        }
+    }
+
+    async function checkUserRole() {
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/commissions'));
+            if (!res.ok) return;
+            const data = await res.json();
+            if (data.isManager) {
+                document.getElementById('tab-staff').style.display = '';
+            }
+        } catch (e) {
+            console.error('Failed to check user role:', e);
+        }
+    }
+
     // Map functions (existing)
     function renderSummary() {
         document.getElementById('locations-stat').textContent = locations.length.toLocaleString();
@@ -589,11 +876,17 @@
         }
     }
 
+    // Close modal on background click
+    document.getElementById('staff-modal').addEventListener('click', (e) => {
+        if (e.target.id === 'staff-modal') closeAddStaffModal();
+    });
+
     let started = false;
     function init() {
         if (started) return;
         started = true;
         loadData();
+        checkUserRole();
     }
     window.addEventListener('shopify:api-fetch-ready', init, { once: true });
     window.addEventListener('load', init, { once: true });
