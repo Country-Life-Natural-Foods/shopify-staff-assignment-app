@@ -166,8 +166,6 @@ const shopifyAppInstance = shopifyApp({
       'read_orders',
       'read_metaobjects',
       'write_metaobjects',
-      'read_marketplace_orders',
-      'read_quick_sale',
     ],
     hostName,
     hostScheme,
@@ -460,13 +458,6 @@ const fetchAllCompanies = async (client) => {
             ordersCount {
               count
             }
-            recentOrders: orders(first: 25, sortKey: CREATED_AT, reverse: true) {
-              edges {
-                node {
-                  createdAt
-                }
-              }
-            }
             metafield(namespace: "clnf", key: "crm_notes") {
               value
             }
@@ -505,8 +496,12 @@ const fetchAllCompanies = async (client) => {
 
     const totalSpend = parseFloat(company.totalSpent?.amount || '0') || 0;
     const orderCount = company.ordersCount?.count || 0;
-    const orderDates = (company.recentOrders?.edges || []).map((e) => e.node.createdAt);
-    const orderStats = calculateOrderStats(orderDates);
+    // Last-order-date/order-cadence would come from Company.orders, but that field
+    // (unlike totalSpent/ordersCount) additionally requires read_marketplace_orders
+    // and read_quick_sale, which Shopify does not grant via normal OAuth consent for
+    // this app (confirmed live: requesting them causes an infinite reauth loop, since
+    // the session never actually receives them). Left null until that's resolved.
+    const orderStats = calculateOrderStats([]);
 
     // Parse notes from metafield
     let notes = [];
