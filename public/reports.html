@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Commission Reports</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f6faff; }
+        .loading-overlay { display: none; }
+        .loading-overlay.active { display: flex; }
+        .toast {
+            transform: translate(-50%, calc(100% + 1.5rem));
+            opacity: 0;
+            pointer-events: none;
+            transition: transform 0.3s ease, opacity 0.3s ease;
+        }
+        .toast.active {
+            transform: translate(-50%, 0);
+            opacity: 1;
+            pointer-events: auto;
+        }
+        @media print {
+            .no-print { display: none !important; }
+            body { background: #fff; }
+            #report-root { padding: 0 !important; }
+            .print-card { break-inside: avoid; border: 1px solid #ccc !important; }
+        }
+    </style>
+</head>
+<body class="text-zinc-900 bg-[#f6faff]">
+
+<!-- Top Navigation -->
+<nav class="h-16 border-b border-zinc-200 bg-white flex items-center px-4 md:px-6 justify-between shadow-sm z-40 relative sticky top-0 no-print">
+    <div class="flex items-center gap-3">
+        <a href="/" id="back-link" class="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center hover:bg-zinc-200 transition-colors">
+            <span class="material-symbols-outlined text-zinc-600 text-sm">arrow_back</span>
+        </a>
+        <div class="w-8 h-8 rounded-lg bg-[#008060] flex items-center justify-center">
+            <span class="material-symbols-outlined text-white text-sm">summarize</span>
+        </div>
+        <span class="font-bold text-lg hidden sm:block">Commission Reports</span>
+    </div>
+    <div class="flex items-center gap-2">
+        <input id="report-month" type="month" class="border border-zinc-200 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none"/>
+        <button onclick="downloadCsv()" class="bg-white border border-zinc-200 text-zinc-700 px-3 py-2 rounded-md text-sm font-medium hover:bg-zinc-50 active:scale-[0.98] transition-all flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-sm">download</span>
+            <span class="hidden sm:inline">CSV</span>
+        </button>
+        <button onclick="window.print()" class="bg-white border border-zinc-200 text-zinc-700 px-3 py-2 rounded-md text-sm font-medium hover:bg-zinc-50 active:scale-[0.98] transition-all flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-sm">print</span>
+            <span class="hidden sm:inline">Save as PDF</span>
+        </button>
+    </div>
+</nav>
+
+<!-- Status Toast -->
+<div id="status-toast" class="toast fixed bottom-6 left-1/2 bg-red-600 text-white px-6 py-3 rounded-lg shadow-xl z-50 flex items-center gap-2 max-w-[90vw] md:max-w-md w-full no-print" role="status" aria-live="polite">
+    <span class="material-symbols-outlined" data-toast-icon>error</span>
+    <p class="text-sm font-medium flex-1" data-toast-message></p>
+</div>
+
+<!-- Loading Overlay -->
+<div id="loading-overlay" class="loading-overlay fixed inset-0 bg-white/80 backdrop-blur-sm z-50 items-center justify-center flex-col gap-4 no-print">
+    <div class="w-12 h-12 border-4 border-[#008060]/20 border-t-[#008060] rounded-full animate-spin"></div>
+    <p class="text-[#008060] font-medium animate-pulse">Loading...</p>
+</div>
+
+<!-- Not a manager -->
+<div id="not-manager-view" class="hidden max-w-lg mx-auto mt-24 text-center px-4">
+    <span class="material-symbols-outlined text-4xl text-zinc-300">lock</span>
+    <h2 class="text-lg font-bold mt-2">Managers only</h2>
+    <p class="text-sm text-zinc-500 mt-1">Commission reports are only visible to managers.</p>
+</div>
+
+<!-- Report -->
+<div id="report-root" class="hidden max-w-[1200px] mx-auto w-full p-4 md:p-8">
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold" id="report-title">Commission Report</h1>
+        <p class="text-sm text-zinc-500" id="report-subtitle">Revenue and commission owed, by rep, for the selected month.</p>
+    </div>
+
+    <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-6 flex items-start gap-2 print-card">
+        <span class="material-symbols-outlined text-amber-600 text-lg flex-shrink-0">info</span>
+        <p class="text-xs text-amber-800" id="rate-disclaimer"></p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div class="bg-gradient-to-br from-emerald-50 to-green-50 rounded-xl p-5 border border-emerald-200 print-card">
+            <p class="text-sm font-medium text-emerald-600 mb-2">Total Commission Owed</p>
+            <h3 class="text-3xl font-bold text-emerald-900" id="total-commission">$0.00</h3>
+        </div>
+        <div class="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-5 border border-blue-200 print-card">
+            <p class="text-sm font-medium text-blue-600 mb-2">Total Revenue</p>
+            <h3 class="text-3xl font-bold text-blue-900" id="total-revenue">$0.00</h3>
+        </div>
+        <div class="bg-gradient-to-br from-violet-50 to-purple-50 rounded-xl p-5 border border-violet-200 print-card">
+            <p class="text-sm font-medium text-violet-600 mb-2">Reps</p>
+            <h3 class="text-3xl font-bold text-violet-900" id="rep-count">0</h3>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-xl border border-zinc-200 overflow-hidden print-card" id="report-table">
+        <div class="divide-y divide-zinc-200" id="report-list"></div>
+    </div>
+    <p class="text-xs text-zinc-400 mt-4" id="generated-at"></p>
+</div>
+
+<!-- Set/Verify Code -->
+<div id="pin-gate-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 no-print">
+    <div class="bg-white rounded-lg max-w-sm w-full p-6 shadow-xl">
+        <h3 class="text-lg font-bold mb-2" id="pin-gate-title">Enter your code</h3>
+        <p class="text-sm text-zinc-500 mb-4" id="pin-gate-subtitle">Reports show real pay figures, so this page is protected with your personal 4-digit code.</p>
+        <input id="pin-gate-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="••••" autocomplete="off" class="w-full text-center text-2xl tracking-[0.5em] px-3 py-2 border border-zinc-200 rounded-md focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none" onkeyup="if (event.key === 'Enter') submitPinGate()"/>
+        <p class="text-xs text-red-600 mt-2 hidden" id="pin-gate-error"></p>
+        <div class="flex gap-2 mt-6">
+            <a id="pin-gate-back" href="#" class="flex-1 px-4 py-2 border border-zinc-200 rounded-md text-sm font-medium text-center hover:bg-zinc-50">Back to Dashboard</a>
+            <button onclick="submitPinGate()" class="flex-1 px-4 py-2 bg-[#008060] text-white rounded-md text-sm font-medium hover:bg-[#00654b]">Continue</button>
+        </div>
+    </div>
+</div>
+
+<script type="module" src="/shopify-session-bootstrap.js"></script>
+<script>
+    let toastHideTimer = null;
+    let pinGateMode = null; // 'set' | 'verify'
+
+    function apiUrl(path) {
+        const params = new URLSearchParams(window.location.search);
+        const shop = params.get('shop');
+        const host = params.get('host');
+        const q = new URLSearchParams();
+        if (shop) q.set('shop', shop);
+        if (host) q.set('host', host);
+        const qs = q.toString();
+        return qs ? `${path}?${qs}` : path;
+    }
+
+    // Preserve shop/host so navigating back into the tabbed dashboard stays embedded.
+    document.getElementById('back-link').href = apiUrl('/');
+    document.getElementById('pin-gate-back').href = apiUrl('/');
+
+    function setLoading(active) {
+        document.getElementById('loading-overlay').classList.toggle('active', active);
+    }
+
+    function showToast(msg, type = 'error') {
+        const toast = document.getElementById('status-toast');
+        const isSuccess = type === 'success';
+        toast.classList.toggle('bg-green-600', isSuccess);
+        toast.classList.toggle('bg-red-600', !isSuccess);
+        toast.querySelector('[data-toast-icon]').textContent = isSuccess ? 'check_circle' : 'error';
+        toast.querySelector('[data-toast-message]').textContent = msg;
+        toast.classList.add('active');
+        clearTimeout(toastHideTimer);
+        toastHideTimer = setTimeout(() => toast.classList.remove('active'), 5000);
+    }
+
+    function showError(msg) {
+        showToast(msg, 'error');
+    }
+
+    async function readApiError(res, fallback) {
+        try {
+            const data = await res.json();
+            return data.error || fallback;
+        } catch {
+            return fallback;
+        }
+    }
+
+    function escapeHtml(str) {
+        return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+    }
+
+    // Defaults the picker to last month — this report is meant to be pulled
+    // on the 1st to look back at the month that just closed.
+    function defaultMonthValue() {
+        const now = new Date();
+        const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    }
+
+    function renderReport(data) {
+        document.getElementById('report-title').textContent = `Commission Report — ${data.period.label}`;
+        document.getElementById('total-commission').textContent = `$${data.totals.totalCommission.toFixed(2)}`;
+        document.getElementById('total-revenue').textContent = `$${data.totals.totalRevenue.toFixed(2)}`;
+        document.getElementById('rep-count').textContent = data.reps.length;
+        document.getElementById('generated-at').textContent = `Generated ${new Date(data.generatedAt).toLocaleString()}`;
+        document.getElementById('rate-disclaimer').textContent =
+            `Rates shown are each rep's commission tier as of right now, not a historical snapshot of ${data.period.label}. ` +
+            `If a rate changed after ${data.period.label} closed, this report uses the new rate — confirm the % below matches what should apply before paying out.`;
+
+        const list = document.getElementById('report-list');
+        list.innerHTML = data.reps.map((rep) => {
+            const companyRows = rep.companies.length > 0 ? `
+                <div class="mt-3 pt-3 border-t border-zinc-100 space-y-1.5">
+                    ${rep.companies.map((c) => `
+                        <div class="flex justify-between items-center text-xs">
+                            <span class="text-zinc-600">${escapeHtml(c.companyName || 'Unknown company')}${c.assignedAt ? ` <span class="text-zinc-400">· since ${new Date(c.assignedAt).toLocaleDateString()}</span>` : ''}</span>
+                            <span class="font-medium text-zinc-900 flex-shrink-0 ml-2">$${c.revenue.toFixed(2)} <span class="text-emerald-600">(+$${c.commission.toFixed(2)})</span></span>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : `<p class="text-xs text-zinc-400 mt-2">No companies assigned this period.</p>`;
+
+            return `
+                <div class="p-4 border-b border-zinc-100 last:border-0">
+                    <div class="flex justify-between items-start mb-1">
+                        <div>
+                            <h4 class="font-semibold text-sm text-zinc-900 flex items-center gap-2">
+                                ${escapeHtml(rep.name || 'Unknown')}
+                                <span class="inline-block px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 text-xs font-semibold">${rep.commissionTier}% rate</span>
+                            </h4>
+                            <p class="text-xs text-zinc-400">${escapeHtml(rep.email || '')}</p>
+                        </div>
+                        <div class="text-right flex-shrink-0">
+                            <p class="text-lg font-bold text-emerald-700">$${rep.totalCommission.toFixed(2)}</p>
+                            <p class="text-xs text-zinc-400">on $${rep.totalRevenue.toFixed(2)} revenue</p>
+                        </div>
+                    </div>
+                    ${companyRows}
+                </div>
+            `;
+        }).join('') || `<p class="p-6 text-sm text-zinc-400 text-center">No staff on record.</p>`;
+    }
+
+    async function loadReport() {
+        const month = document.getElementById('report-month').value;
+        setLoading(true);
+        try {
+            const res = await window.shopifyApiFetch(apiUrl(`/api/reports/commissions?month=${month}`));
+            if (res.status === 403) {
+                const data = await res.json().catch(() => ({}));
+                if (data.code === 'PIN_REQUIRED' || data.code === 'PIN_NOT_SET') {
+                    openPinGateModal(data.code === 'PIN_NOT_SET' ? 'set' : 'verify');
+                    return;
+                }
+                document.getElementById('report-root').classList.add('hidden');
+                document.getElementById('not-manager-view').classList.remove('hidden');
+                return;
+            }
+            if (!res.ok) throw new Error(await readApiError(res, 'Failed to load report'));
+            const data = await res.json();
+            document.getElementById('not-manager-view').classList.add('hidden');
+            document.getElementById('report-root').classList.remove('hidden');
+            renderReport(data);
+        } catch (e) {
+            showError(e.message);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    async function downloadCsv() {
+        const month = document.getElementById('report-month').value;
+        setLoading(true);
+        try {
+            const res = await window.shopifyApiFetch(apiUrl(`/api/reports/commissions/export.csv?month=${month}`));
+            if (!res.ok) throw new Error(await readApiError(res, 'Failed to export CSV'));
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `commissions-${month}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            showError(e.message);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    function openPinGateModal(mode) {
+        pinGateMode = mode;
+        document.getElementById('pin-gate-title').textContent = mode === 'set' ? 'Set your code' : 'Enter your code';
+        document.getElementById('pin-gate-subtitle').textContent = mode === 'set'
+            ? "Choose a 4-digit code. You'll enter this each time you open Reports in a new session — if you forget it, ask a manager to reset it for you."
+            : 'Reports show real pay figures, so this page is protected with your personal 4-digit code.';
+        document.getElementById('pin-gate-input').value = '';
+        document.getElementById('pin-gate-error').classList.add('hidden');
+        document.getElementById('pin-gate-modal').classList.remove('hidden');
+        setTimeout(() => document.getElementById('pin-gate-input').focus(), 50);
+    }
+
+    function closePinGateModal() {
+        document.getElementById('pin-gate-modal').classList.add('hidden');
+    }
+
+    async function submitPinGate() {
+        const pin = document.getElementById('pin-gate-input').value.trim();
+        const errorEl = document.getElementById('pin-gate-error');
+        errorEl.classList.add('hidden');
+
+        if (!/^\d{4}$/.test(pin)) {
+            errorEl.textContent = 'Enter exactly 4 digits.';
+            errorEl.classList.remove('hidden');
+            return;
+        }
+
+        const endpoint = pinGateMode === 'set' ? '/api/commissions/pin/set' : '/api/commissions/pin/verify';
+        setLoading(true);
+        try {
+            const res = await window.shopifyApiFetch(apiUrl(endpoint), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                errorEl.textContent = data.error || 'Something went wrong.';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+            closePinGateModal();
+            loadReport();
+        } catch (e) {
+            errorEl.textContent = e.message;
+            errorEl.classList.remove('hidden');
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    document.getElementById('report-month').value = defaultMonthValue();
+    document.getElementById('report-month').addEventListener('change', loadReport);
+
+    window.addEventListener('shopify:api-fetch-ready', loadReport, { once: true });
+</script>
+</body>
+</html>

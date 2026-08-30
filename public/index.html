@@ -54,6 +54,10 @@
             <span class="material-symbols-outlined text-sm">person_add</span>
             Link My Account
         </button>
+        <a id="reports-link" href="#" style="display:none;" class="bg-white border border-zinc-200 text-zinc-700 px-4 py-2 rounded-md text-sm font-medium hover:bg-zinc-50 active:scale-[0.98] transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">summarize</span>
+            Reports
+        </a>
         <button id="sync-btn" onclick="syncMap()" class="bg-[#008060] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[#00654b] active:scale-[0.98] transition-all flex items-center gap-2">
             <span class="material-symbols-outlined text-sm">sync</span>
             Run Map Sync
@@ -448,6 +452,8 @@
         const qs = q.toString();
         return qs ? `${path}?${qs}` : path;
     }
+
+    document.getElementById('reports-link').href = apiUrl('/reports');
 
     function setLoading(active) {
         document.getElementById('loading-overlay').classList.toggle('active', active);
@@ -1275,6 +1281,7 @@
             hasAnyManagerGlobal = !!data.hasAnyManager;
             document.getElementById('tab-staff').style.display = isManagerGlobal ? '' : 'none';
             document.getElementById('claim-admin-btn').style.display = data.hasAnyManager ? 'none' : '';
+            document.getElementById('reports-link').style.display = isManagerGlobal ? '' : 'none';
         } catch (e) {
             console.error('Failed to check user role:', e);
         }

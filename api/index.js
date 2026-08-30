@@ -292,6 +292,22 @@ app.get(
   },
 );
 
+// Monthly commission report — its own route (not another tab in index.html)
+// so it loads independently and can eventually move fully off the main bundle.
+app.get(
+  '/reports',
+  ensureInstalledOnShop,
+  shopifyCspHeaders,
+  (req, res) => {
+    try {
+      sendAppHtmlFile(res, 'reports.html');
+    } catch (error) {
+      console.error('Error loading reports page:', error);
+      res.status(500).send('Internal server error');
+    }
+  },
+);
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({
@@ -702,8 +718,14 @@ const fetchAllCompanies = async (client) => {
 // older than that cutoff — no need to paginate further once we're past it.
 // A null/undefined `sinceIso` (shouldn't normally happen — see enrichCompany's
 // assignedAt backfill) falls back to lifetime revenue rather than crediting nothing.
-const fetchCompanyRevenueSince = async (client, companyId, sinceIso) => {
+//
+// `untilIso`, when given, caps the other end (used for monthly reports, which
+// need "this rep's revenue *during* July" rather than "since assignment to
+// today"). Orders newer than `untilIso` are skipped, not treated as a stop
+// condition — pagination continues past them until it reaches the window.
+const fetchCompanyRevenueSince = async (client, companyId, sinceIso, untilIso = null) => {
   const sinceTime = sinceIso ? new Date(sinceIso).getTime() : null;
+  const untilTime = untilIso ? new Date(untilIso).getTime() : null;
   const query = `
     query getCompanyOrdersSince($id: ID!, $first: Int!, $after: String) {
       company(id: $id) {
@@ -743,8 +765,12 @@ const fetchCompanyRevenueSince = async (client, companyId, sinceIso) => {
 
     for (const edge of ordersData.edges || []) {
       const createdAt = edge.node.createdAt;
-      if (sinceTime !== null && new Date(createdAt).getTime() < sinceTime) {
+      const createdTime = new Date(createdAt).getTime();
+      if (sinceTime !== null && createdTime < sinceTime) {
         return { totalSpend, orderCount, lastOrderDate };
+      }
+      if (untilTime !== null && createdTime > untilTime) {
+        continue;
       }
       totalSpend += parseFloat(edge.node.currentTotalPriceSet?.shopMoney?.amount || '0') || 0;
       orderCount += 1;
@@ -1322,6 +1348,206 @@ app.post('/api/staff/:staffId/pin/reset', validateAuthenticatedSession, async (r
     res.json({ success: true });
   } catch (error) {
     console.error('POST /api/staff/:staffId/pin/reset', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Resolves a "YYYY-MM" query param to a calendar-month window. Reports are
+// meant to be pulled on the 1st to look back at the month that just closed,
+// so no param at all defaults to *last* month, not the current (still-open) one.
+function resolveReportMonth(monthParam) {
+  let year;
+  let month; // 1-12
+  if (monthParam && /^\d{4}-\d{2}$/.test(monthParam)) {
+    [year, month] = monthParam.split('-').map(Number);
+  } else {
+    const now = new Date();
+    year = now.getUTCFullYear();
+    month = now.getUTCMonth(); // 0-based current month == 1-based previous month
+    if (month === 0) {
+      month = 12;
+      year -= 1;
+    }
+  }
+  const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
+  const end = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+  const label = start.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  return { month: monthStr, label, start, end };
+}
+
+// Shared by the JSON and CSV report endpoints below. Reports are a
+// manager-only, finance-facing view of everyone's pay, so — same as
+// Commissions — the viewer (manager included) must have verified their own
+// 4-digit code this session before any figures come back.
+async function buildCommissionReport(req, res, monthParam) {
+  const user = await getCurrentUser(req, res);
+  const isUserManager = await isManager(user);
+  if (!isUserManager) {
+    return { status: 403, error: 'Only managers can view commission reports.' };
+  }
+
+  const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+  if (!ownStaff) {
+    return { status: 403, error: 'Ask a manager to add you as staff before viewing reports.' };
+  }
+  if (req.session?.commissionsUnlockedFor !== ownStaff.id) {
+    const pinInfo = await staffStore.getPinInfo(ownStaff.id);
+    return {
+      status: 403,
+      error: pinInfo?.pinHash ? 'Enter your 4-digit code to view reports.' : 'Set a 4-digit code to view reports.',
+      code: pinInfo?.pinHash ? 'PIN_REQUIRED' : 'PIN_NOT_SET',
+    };
+  }
+
+  const client = await getGraphqlClient(req, res);
+  if (!client) return { status: 401, error: 'Unauthorized' };
+
+  const period = resolveReportMonth(monthParam);
+  const companies = await fetchAllCompanies(client);
+  const allStaff = await staffStore.list();
+
+  // Every staff member gets an entry — including reps with $0 this period —
+  // so finance sees a complete roster rather than wondering if someone was
+  // missed off the export.
+  const repsMap = {};
+  for (const staffRecord of allStaff) {
+    repsMap[staffRecord.id] = {
+      staffId: staffRecord.id,
+      name: staffRecord.name,
+      email: staffRecord.email,
+      commissionTier: staffRecord.commissionTier,
+      companies: [],
+      totalRevenue: 0,
+      totalCommission: 0,
+    };
+  }
+
+  for (const company of companies) {
+    const assigned = company.assignedStaff;
+    const rep = assigned?.staffId ? repsMap[assigned.staffId] : null;
+    if (!rep) continue;
+
+    const assignedAt = assigned.assignedAt ? new Date(assigned.assignedAt) : null;
+    const effectiveSince = assignedAt && assignedAt > period.start ? assignedAt : period.start;
+    if (effectiveSince > period.end) continue; // assigned after this period closed — nothing earned yet
+
+    const revenueSince = await fetchCompanyRevenueSince(
+      client,
+      company.id,
+      effectiveSince.toISOString(),
+      period.end.toISOString(),
+    );
+    const revenue = revenueSince.totalSpend;
+    const commission = (revenue * rep.commissionTier) / 100;
+
+    rep.companies.push({
+      companyId: company.id,
+      companyName: company.name,
+      revenue,
+      commission,
+      assignedAt: assigned.assignedAt || null,
+    });
+    rep.totalRevenue += revenue;
+    rep.totalCommission += commission;
+  }
+
+  const reps = Object.values(repsMap).sort((a, b) => b.totalCommission - a.totalCommission);
+  const totals = reps.reduce(
+    (acc, r) => {
+      acc.totalRevenue += r.totalRevenue;
+      acc.totalCommission += r.totalCommission;
+      return acc;
+    },
+    { totalRevenue: 0, totalCommission: 0 },
+  );
+
+  return {
+    status: 200,
+    period: {
+      month: period.month,
+      label: period.label,
+      start: period.start.toISOString(),
+      end: period.end.toISOString(),
+    },
+    reps,
+    totals,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+app.get('/api/reports/commissions', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const report = await buildCommissionReport(req, res, req.query.month);
+    if (report.status !== 200) {
+      return res.status(report.status).json({ error: report.error, code: report.code });
+    }
+    const { status, ...body } = report;
+    res.json(body);
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/reports/commissions', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// CSV rather than a server-rendered PDF: it's zero new dependencies (no
+// headless-browser/PDF library to keep working on Vercel's serverless
+// runtime), and it opens directly in whatever finance already uses
+// (Excel/Sheets) instead of a fixed layout they'd have to re-key. The
+// reports.html page itself is print-styled for a "Save as PDF" option
+// when a formatted one-pager is what's actually wanted.
+function csvField(value) {
+  const str = String(value ?? '');
+  return /[",\r\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+app.get('/api/reports/commissions/export.csv', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const report = await buildCommissionReport(req, res, req.query.month);
+    if (report.status !== 200) {
+      return res.status(report.status).json({ error: report.error, code: report.code });
+    }
+
+    // Same caveat shown on the report page — the "Commission Rate %" column
+    // below is each rep's tier as of *right now*, not a historical snapshot,
+    // so a tier change after this period closed isn't reflected retroactively.
+    const rows = [
+      [`Note: Commission Rate % reflects each rep's tier as of ${new Date().toLocaleDateString('en-US')}, not necessarily what was in effect during ${report.period.label}.`],
+      [],
+      ['Rep', 'Email', 'Company', 'Revenue', 'Commission Rate %', 'Commission Owed', 'Assigned Since'],
+    ];
+    for (const rep of report.reps) {
+      if (rep.companies.length === 0) {
+        rows.push([rep.name, rep.email, '(no companies assigned)', '0.00', rep.commissionTier, '0.00', '']);
+      } else {
+        for (const c of rep.companies) {
+          rows.push([
+            rep.name,
+            rep.email,
+            c.companyName,
+            c.revenue.toFixed(2),
+            rep.commissionTier,
+            c.commission.toFixed(2),
+            c.assignedAt ? new Date(c.assignedAt).toLocaleDateString('en-US') : '',
+          ]);
+        }
+      }
+      rows.push([`${rep.name} — Total`, '', '', rep.totalRevenue.toFixed(2), '', rep.totalCommission.toFixed(2), '']);
+    }
+    rows.push(['GRAND TOTAL', '', '', report.totals.totalRevenue.toFixed(2), '', report.totals.totalCommission.toFixed(2), '']);
+
+    const csv = rows.map((row) => row.map(csvField).join(',')).join('\r\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="commissions-${report.period.month}.csv"`);
+    res.send(csv);
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/reports/commissions/export.csv', error);
     res.status(500).json({ error: error.message });
   }
 });

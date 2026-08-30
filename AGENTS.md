@@ -26,3 +26,13 @@
   - `DELETE /api/companies/:companyId/notes/:noteId` — delete note
 - **Filters**: All Companies, Last 30 Days, 31–89 Days, 90+ Days, Never Ordered. Map tab stays as second tab.
 - **Permissions needed**: `read_companies`, `write_companies`, `read_orders` for fetching companies and order data; metafield updates need `write_companies`.
+
+## Commission Reports (Reports page — `/reports`)
+
+- **First real "separate route"** in the app: `public/reports.html`, served via `app.get('/reports', ensureInstalledOnShop, shopifyCspHeaders, ...)` in `api/index.js`, mirroring the `/` handler exactly (same App Bridge meta injection via `sendAppHtmlFile`). Manager-only; linked from the main dashboard's top nav (`#reports-link`, toggled in `checkUserRole()`).
+- **Purpose**: monthly payout report for finance — per rep, which companies, revenue for that calendar month, and commission owed. The existing Commissions tab is *lifetime revenue since assignment*, not month-scoped — Reports is the actual "last month's numbers" view.
+- **Access gate**: same PIN gate as Commissions (`req.session.commissionsUnlockedFor`), reused as-is — a manager who already unlocked Commissions this session is auto-unlocked here too.
+- **Endpoints**: `GET /api/reports/commissions?month=YYYY-MM` (JSON) and `GET /api/reports/commissions/export.csv?month=YYYY-MM` (CSV download, for handing to finance). No `month` defaults to *last* calendar month (report is meant to be pulled on the 1st). Both share `buildCommissionReport()` in `api/index.js`.
+- **Every staff member appears**, even with $0/no companies for the period — deliberate, so finance sees a complete roster rather than wondering if someone was left off.
+- **Known limitation**: commission tier used is the rep's *current* tier (`staffStore`), not whatever was in effect during the reported month. If a manager changes someone's tier, regenerating a past month's report will use the new tier, not the historical one. No point-in-time tier history is tracked.
+- **Export format**: CSV (not PDF) — zero new dependencies, opens directly in Excel/Sheets. `reports.html` itself has print CSS (`@media print`) so "Save as PDF" via the browser print dialog covers the PDF ask without a server-side PDF/headless-browser library.
