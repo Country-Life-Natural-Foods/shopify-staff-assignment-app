@@ -111,6 +111,7 @@
                     <button onclick="setFilter('89')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="89">31-89 Days</button>
                     <button onclick="setFilter('90')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="90">90+ Days</button>
                     <button onclick="setFilter('never')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="never">Never Ordered</button>
+                    <button onclick="setFilter('new')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="new">New Partners</button>
                     <span class="text-xs text-zinc-400 ml-2 hidden sm:inline">Sort</span>
                     <button type="button" onclick="setSort('stale')" class="sort-btn px-3 py-1 rounded-md text-sm font-medium bg-[#008060] text-white" data-sort="stale">Longest since order</button>
                     <button type="button" onclick="setSort('recent')" class="sort-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-sort="recent">Most recent order</button>
@@ -560,8 +561,18 @@
         return `${daysSince} days`;
     }
 
+    // A "new partner" is a business still ramping up (3 or fewer lifetime
+    // orders) — worth flagging for extra follow-up attention, regardless of
+    // how recently that handful of orders came in.
+    const NEW_PARTNER_MAX_ORDERS = 3;
+    function isNewPartner(company) {
+        const orderCount = company.performance?.orderCount;
+        return orderCount !== undefined && orderCount !== null && orderCount <= NEW_PARTNER_MAX_ORDERS;
+    }
+
     function shouldShowCompany(company) {
         if (currentFilter === 'all') return true;
+        if (currentFilter === 'new') return isNewPartner(company);
         const days = company.performance?.daysSinceLastOrder;
         if (currentFilter === '30') return days !== null && days <= 30;
         if (currentFilter === '89') return days !== null && days > 30 && days <= 89;
@@ -618,6 +629,8 @@
             const lastOrder = perf.lastOrderDate ? new Date(perf.lastOrderDate).toLocaleDateString() : '-';
             const avgGap = perf.avgDaysBetweenOrders || '-';
             const totalSpend = `$${(perf.totalSpend || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            const customerSince = c.createdAt ? new Date(c.createdAt).toLocaleDateString() : '-';
+            const isNew = isNewPartner(c);
             const notes = c.notes || [];
             const assignedRepCell = renderAssignedRepCell(c);
 
@@ -625,7 +638,10 @@
                 <div class="p-4 border-b border-zinc-100 last:border-0 hover:bg-zinc-50 transition-colors cursor-pointer" onclick="openNotes('${c.id}', '${c.name.replace(/'/g, "\\'")}')">
                     <div class="flex justify-between items-start mb-2">
                         <div class="flex-1">
-                            <h4 class="font-semibold text-sm text-zinc-900">${c.name}</h4>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <h4 class="font-semibold text-sm text-zinc-900">${c.name}</h4>
+                                ${isNew ? `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-700">NEW</span>` : ''}
+                            </div>
                             ${c.externalId ? `<p class="text-xs text-zinc-500 mt-1">ID: ${c.externalId}</p>` : ''}
                         </div>
                         <div class="flex items-center gap-2">
@@ -633,7 +649,11 @@
                             ${notes.length > 0 ? `<span class="material-symbols-outlined text-sm text-[#008060]">note</span>` : ''}
                         </div>
                     </div>
-                    <div class="grid grid-cols-4 gap-4 mt-3 text-xs">
+                    <div class="grid grid-cols-5 gap-4 mt-3 text-xs">
+                        <div>
+                            <p class="text-zinc-500 mb-1">Customer Since</p>
+                            <p class="font-medium text-zinc-900">${customerSince}</p>
+                        </div>
                         <div>
                             <p class="text-zinc-500 mb-1">Total Spend</p>
                             <p class="font-medium text-zinc-900">${totalSpend}</p>
@@ -849,6 +869,21 @@
             const commission = staff?.totalCommission || 0;
             const revenue = staff?.totalRevenue || 0;
             const tier = staff?.commissionTier || 0;
+            const companyRows = staff?.companies || [];
+
+            // Payout is earned only from orders placed since each company was
+            // assigned to this rep, not the company's full order history — show
+            // the "since" date per company so the numbers are self-explanatory.
+            const companyBreakdown = companyRows.length > 0 ? `
+                <div class="mt-3 pt-3 border-t border-zinc-100 space-y-1.5">
+                    ${companyRows.map(c => `
+                        <div class="flex justify-between items-center text-xs">
+                            <span class="text-zinc-600">${c.companyName || 'Unknown company'}${c.assignedAt ? ` <span class="text-zinc-400">· since ${new Date(c.assignedAt).toLocaleDateString()}</span>` : ''}</span>
+                            <span class="font-medium text-zinc-900 flex-shrink-0 ml-2">$${(c.revenue || 0).toFixed(2)} <span class="text-emerald-600">(+$${(c.commission || 0).toFixed(2)})</span></span>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : '';
 
             return `
                 <div class="p-4 border-b border-zinc-100 last:border-0 hover:bg-zinc-50 transition-colors">
@@ -859,9 +894,10 @@
                         </div>
                         <div class="text-right">
                             <p class="text-2xl font-bold text-emerald-600">$${commission.toFixed(2)}</p>
-                            <p class="text-xs text-zinc-500 mt-1">${tier}% of $${revenue.toFixed(2)}</p>
+                            <p class="text-xs text-zinc-500 mt-1">${tier}% of $${revenue.toFixed(2)} earned since assignment</p>
                         </div>
                     </div>
+                    ${companyBreakdown}
                 </div>
             `;
         }).join('') || '<div class="p-8 text-center text-zinc-500"><p>No commission data available</p></div>';

@@ -120,6 +120,28 @@ app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Fail fast instead of hanging for the full Vercel maxDuration (300s).
+// Production logs showed the embedded app's "/" route stall for the entire
+// 300 seconds and come back as a 504 when the Postgres session lookup hit a
+// connection hiccup (Neon compute slow to wake, transient network blip) —
+// the merchant just sees a blank iframe for five minutes. This guard sends a
+// prompt, retryable error well before that so Shopify Admin / the client can
+// recover in seconds instead. It doesn't fix a slow/hung DB call itself, but
+// bounds how long the merchant waits to find out something went wrong.
+const REQUEST_TIMEOUT_MS = 20000;
+app.use((req, res, next) => {
+  const timer = setTimeout(() => {
+    if (!res.headersSent) {
+      console.error(`[timeout-guard] ${req.method} ${req.originalUrl} exceeded ${REQUEST_TIMEOUT_MS}ms`);
+      res.status(503).json({ error: 'Temporarily unavailable, please retry.', code: 'TIMEOUT_GUARD' });
+    }
+  }, REQUEST_TIMEOUT_MS);
+  timer.unref?.();
+  res.on('finish', () => clearTimeout(timer));
+  res.on('close', () => clearTimeout(timer));
+  next();
+});
+
 const {
   shopifySessionStorage,
   expressSessionStore,
@@ -349,7 +371,7 @@ function decodeRouteParam(value) {
 // Lightweight single-company read, used only to check the current assignment
 // before allowing a rep to self-assign/release (avoids re-fetching every
 // company + its orders just to authorize one write).
-const getCompanyAssignedStaffId = async (client, companyId) => {
+const getCompanyAssignedStaff = async (client, companyId) => {
   const query = `
     query getCompanyAssignment($id: ID!) {
       company(id: $id) {
@@ -365,10 +387,15 @@ const getCompanyAssignedStaffId = async (client, companyId) => {
   const value = response.body?.data?.company?.metafield?.value;
   if (!value) return null;
   try {
-    return JSON.parse(value)?.staffId || null;
+    return JSON.parse(value) || null;
   } catch (e) {
     return null;
   }
+};
+
+const getCompanyAssignedStaffId = async (client, companyId) => {
+  const assigned = await getCompanyAssignedStaff(client, companyId);
+  return assigned?.staffId || null;
 };
 
 // Metafields are written via the resource-agnostic metafieldsSet mutation.
@@ -487,6 +514,7 @@ const fetchAllCompanies = async (client) => {
             }
             assignedStaffMetafield: metafield(namespace: "clnf", key: "assigned_staff") {
               value
+              updatedAt
             }
           }
         }
@@ -524,6 +552,14 @@ const fetchAllCompanies = async (client) => {
       const assignedValue = company.assignedStaffMetafield?.value;
       if (assignedValue) {
         assignedStaff = JSON.parse(assignedValue);
+        // Assignments written before commission math was tied to an assignment
+        // date won't have `assignedAt` in the JSON. Fall back to the metafield's
+        // own updatedAt (when Shopify last saw this assignment change) so those
+        // reps aren't retroactively credited with the company's entire order
+        // history — see fetchCompanyRevenueSince.
+        if (assignedStaff && !assignedStaff.assignedAt) {
+          assignedStaff.assignedAt = company.assignedStaffMetafield?.updatedAt || null;
+        }
       }
     } catch (e) {
       console.warn('Failed to parse assigned staff for company', company.id, e.message);
@@ -566,6 +602,69 @@ const fetchAllCompanies = async (client) => {
     cursor = pageInfo.endCursor || null;
   }
   return all;
+};
+
+// Commission payouts are earned on a rep's *own* work, not whatever the
+// company happened to spend before they were assigned. This walks the
+// company's orders newest-first and sums only the ones placed on/after
+// `sinceIso` (the assignment date), stopping as soon as it reaches an order
+// older than that cutoff — no need to paginate further once we're past it.
+// A null/undefined `sinceIso` (shouldn't normally happen — see enrichCompany's
+// assignedAt backfill) falls back to lifetime revenue rather than crediting nothing.
+const fetchCompanyRevenueSince = async (client, companyId, sinceIso) => {
+  const sinceTime = sinceIso ? new Date(sinceIso).getTime() : null;
+  const query = `
+    query getCompanyOrdersSince($id: ID!, $first: Int!, $after: String) {
+      company(id: $id) {
+        orders(first: $first, after: $after, sortKey: CREATED_AT, reverse: true) {
+          edges {
+            node {
+              createdAt
+              currentTotalPriceSet {
+                shopMoney {
+                  amount
+                }
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  `;
+
+  let cursor = null;
+  let hasNextPage = true;
+  let totalSpend = 0;
+  let orderCount = 0;
+  let lastOrderDate = null;
+
+  while (hasNextPage) {
+    const response = await client.query({
+      data: { query, variables: { id: companyId, first: 100, after: cursor } },
+    });
+    throwIfGraphqlErrors(response, 'company orders since assignment');
+    const ordersData = response.body?.data?.company?.orders;
+    if (!ordersData) break;
+
+    for (const edge of ordersData.edges || []) {
+      const createdAt = edge.node.createdAt;
+      if (sinceTime !== null && new Date(createdAt).getTime() < sinceTime) {
+        return { totalSpend, orderCount, lastOrderDate };
+      }
+      totalSpend += parseFloat(edge.node.currentTotalPriceSet?.shopMoney?.amount || '0') || 0;
+      orderCount += 1;
+      if (!lastOrderDate || createdAt > lastOrderDate) lastOrderDate = createdAt;
+    }
+
+    hasNextPage = Boolean(ordersData.pageInfo?.hasNextPage);
+    cursor = ordersData.pageInfo?.endCursor || null;
+  }
+
+  return { totalSpend, orderCount, lastOrderDate };
 };
 
 // API Endpoints
@@ -927,11 +1026,19 @@ app.post('/api/companies/:companyId/assignment', validateAuthenticatedSession, a
     const companyId = decodeRouteParam(req.params.companyId);
     const { staffId } = req.body;
 
+    const currentAssignment = await getCompanyAssignedStaff(client, companyId);
+
     let assignedStaff = null;
     if (staffId) {
       const staffRecord = await staffStore.findById(staffId);
       if (!staffRecord) return res.status(400).json({ error: 'Unknown staff member' });
-      assignedStaff = { staffId: staffRecord.id, name: staffRecord.name, email: staffRecord.email };
+      // Only reset the commission clock when the rep actually changes — a
+      // no-op re-save of the same rep must not zero out revenue they've
+      // already earned credit for since their real assignment date.
+      const assignedAt = currentAssignment?.staffId === staffId && currentAssignment?.assignedAt
+        ? currentAssignment.assignedAt
+        : new Date().toISOString();
+      assignedStaff = { staffId: staffRecord.id, name: staffRecord.name, email: staffRecord.email, assignedAt };
     }
 
     if (!isUserManager) {
@@ -943,8 +1050,7 @@ app.post('/api/companies/:companyId/assignment', validateAuthenticatedSession, a
         return res.status(403).json({ error: 'You can only assign yourself' });
       }
 
-      const currentlyAssignedId = await getCompanyAssignedStaffId(client, companyId);
-      if (currentlyAssignedId && currentlyAssignedId !== ownStaff.id) {
+      if (currentAssignment?.staffId && currentAssignment.staffId !== ownStaff.id) {
         return res.status(403).json({ error: 'This company is already assigned to another rep. Ask a manager to reassign it.' });
       }
     }
@@ -969,6 +1075,13 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
+    // Reps can only see their own commissions. Resolved up front so the
+    // per-company revenue-since-assignment fetch below (one Shopify API call
+    // per assigned company) is skipped for companies that won't be shown anyway.
+    const ownStaff = !isUserManager && user?.shopifyUserId
+      ? await staffStore.findByShopifyUserId(user.shopifyUserId)
+      : null;
+
     // Fetch all companies with their app-owned rep assignment and revenue
     const companies = await fetchAllCompanies(client);
 
@@ -978,6 +1091,7 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
     for (const company of companies) {
       const assigned = company.assignedStaff;
       if (!assigned?.staffId) continue;
+      if (!isUserManager && assigned.staffId !== ownStaff?.id) continue;
 
       const staffRecord = await staffStore.findById(assigned.staffId);
       if (!staffRecord) continue;
@@ -994,7 +1108,10 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
         };
       }
 
-      const revenue = company.performance?.totalSpend || 0;
+      // Commission is earned only on orders placed since this rep took over the
+      // account (see fetchCompanyRevenueSince) — not the company's lifetime spend.
+      const revenueSince = await fetchCompanyRevenueSince(client, company.id, assigned.assignedAt);
+      const revenue = revenueSince.totalSpend;
       const commission = (revenue * staffRecord.commissionTier) / 100;
 
       commissionsMap[staffRecord.id].companies.push({
@@ -1002,6 +1119,7 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
         companyName: company.name,
         revenue,
         commission,
+        assignedAt: assigned.assignedAt || null,
         lastOrderDate: company.performance?.lastOrderDate
       });
 
@@ -1009,14 +1127,9 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
       commissionsMap[staffRecord.id].totalCommission += commission;
     }
 
-    let commissions = Object.values(commissionsMap);
-
-    // Apply role-based filtering
-    if (!isUserManager) {
-      // Reps can only see their own commissions
-      const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
-      commissions = ownStaff ? commissions.filter(c => c.staffId === ownStaff.id) : [];
-    }
+    // Non-managers with no linked staff record see nothing (handled by the
+    // per-company skip above never populating commissionsMap for them).
+    const commissions = Object.values(commissionsMap);
 
     // Sort by total commission descending
     commissions.sort((a, b) => b.totalCommission - a.totalCommission);
@@ -1072,7 +1185,8 @@ app.get('/api/commissions/:staffId', validateAuthenticatedSession, async (req, r
     for (const company of companies) {
       if (company.assignedStaff?.staffId !== staffId) continue;
 
-      const revenue = company.performance?.totalSpend || 0;
+      const revenueSince = await fetchCompanyRevenueSince(client, company.id, company.assignedStaff.assignedAt);
+      const revenue = revenueSince.totalSpend;
       const commission = (revenue * repCommissions.commissionTier) / 100;
 
       repCommissions.companies.push({
@@ -1080,6 +1194,7 @@ app.get('/api/commissions/:staffId', validateAuthenticatedSession, async (req, r
         companyName: company.name,
         revenue,
         commission,
+        assignedAt: company.assignedStaff.assignedAt || null,
         lastOrderDate: company.performance?.lastOrderDate,
         daysSinceLastOrder: company.performance?.daysSinceLastOrder
       });
