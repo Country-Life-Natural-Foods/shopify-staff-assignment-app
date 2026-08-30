@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const fs = require('fs');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
@@ -341,6 +342,30 @@ const isManager = async (user) => {
   return staffRecord?.role === 'manager';
 };
 
+// Commissions show real pay figures, so viewing them needs a rep's own
+// 4-digit code on top of Shopify login — see docs on the self-claim flow
+// above staffStore.claim: identity there is self-asserted with no
+// verification, so a PIN tied to the staff record (not the Shopify login)
+// is what actually keeps someone from seeing another rep's numbers.
+const PIN_MAX_ATTEMPTS = 5;
+
+function hashPin(pin) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(pin, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPinHash(pin, stored) {
+  if (!stored) return false;
+  const [salt, hash] = stored.split(':');
+  if (!salt || !hash) return false;
+  const candidate = crypto.scryptSync(pin, salt, 64).toString('hex');
+  const a = Buffer.from(hash, 'hex');
+  const b = Buffer.from(candidate, 'hex');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
 const getGraphqlClient = async (req, res) => {
   const sessionData = res.locals.shopify?.session;
   if (!sessionData) return null;
@@ -465,6 +490,39 @@ const calculateOrderStats = (orderDates) => {
   return { lastOrderDate: lastOrderDate.toISOString(), daysSinceLastOrder, avgDaysBetweenOrders };
 };
 
+// Company.orders only lists orders whose purchasingEntity is the B2B company.
+// Wholesale contacts often keep ordering as regular customers (draft invoices,
+// online store), so Company.totalSpent / a contact's lastOrder can be populated
+// while Company.orders is empty. Using only Company.orders for the CRM badge
+// then shows "Never" next to a growing spend total.
+const uniqueContactCustomers = (company) => {
+  const raw = [
+    company.mainContact?.customer,
+    ...(company.contacts?.edges || []).map((edge) => edge?.node?.customer),
+  ].filter(Boolean);
+  const seen = new Set();
+  const customers = [];
+  for (const customer of raw) {
+    const key = customer.id || `anon-${customers.length}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    customers.push(customer);
+  }
+  return customers;
+};
+
+const contactOrderStats = (company) => {
+  const customers = uniqueContactCustomers(company);
+  let maxOrders = 0;
+  const lastOrderDates = [];
+  for (const customer of customers) {
+    const n = parseInt(customer.numberOfOrders, 10);
+    if (Number.isFinite(n) && n > maxOrders) maxOrders = n;
+    if (customer.lastOrder?.createdAt) lastOrderDates.push(customer.lastOrder.createdAt);
+  }
+  return { maxOrders, lastOrderDates };
+};
+
 // Fetch real companies with performance data.
 //
 // totalSpent/ordersCount come straight from Shopify's own Company aggregates —
@@ -483,6 +541,9 @@ const calculateOrderStats = (orderDates) => {
 // what triggered an infinite reauth loop — see the revert of that change).
 // read_orders is already in this app's scope list below and was never removed,
 // so no scope/reauth change is needed for this field.
+//
+// Contact customer.lastOrder fills in cadence when Company.orders is empty but
+// the linked buyer accounts have real order history (see uniqueContactCustomers).
 const fetchAllCompanies = async (client) => {
   if (!client) return [];
   const query = `
@@ -494,6 +555,7 @@ const fetchAllCompanies = async (client) => {
             name
             externalId
             createdAt
+            customerSince
             updatedAt
             totalSpent {
               amount
@@ -502,10 +564,32 @@ const fetchAllCompanies = async (client) => {
             ordersCount {
               count
             }
-            recentOrders: orders(first: 10, sortKey: CREATED_AT, reverse: true) {
+            recentOrders: orders(first: 10, reverse: true) {
               edges {
                 node {
                   createdAt
+                }
+              }
+            }
+            mainContact {
+              customer {
+                id
+                numberOfOrders
+                lastOrder {
+                  createdAt
+                }
+              }
+            }
+            contacts(first: 10) {
+              edges {
+                node {
+                  customer {
+                    id
+                    numberOfOrders
+                    lastOrder {
+                      createdAt
+                    }
+                  }
                 }
               }
             }
@@ -529,9 +613,15 @@ const fetchAllCompanies = async (client) => {
   const enrichCompany = (company) => {
 
     const totalSpend = parseFloat(company.totalSpent?.amount || '0') || 0;
-    const orderCount = company.ordersCount?.count || 0;
-    const orderDates = (company.recentOrders?.edges || []).map((e) => e.node.createdAt);
+    const companyOrderCount = company.ordersCount?.count || 0;
+    const companyOrderDates = (company.recentOrders?.edges || [])
+      .map((e) => e?.node?.createdAt)
+      .filter(Boolean);
+    const contacts = contactOrderStats(company);
+    const orderCount = Math.max(companyOrderCount, contacts.maxOrders);
+    const orderDates = [...companyOrderDates, ...contacts.lastOrderDates];
     const orderStats = calculateOrderStats(orderDates);
+    const hasOrdered = orderCount > 0 || totalSpend > 0 || Boolean(orderStats.lastOrderDate);
 
     // Parse notes from metafield
     let notes = [];
@@ -571,7 +661,8 @@ const fetchAllCompanies = async (client) => {
       lastOrderDate: orderStats.lastOrderDate,
       daysSinceLastOrder: orderStats.daysSinceLastOrder,
       avgDaysBetweenOrders: orderStats.avgDaysBetweenOrders,
-      avgOrderValue: orderCount > 0 ? totalSpend / orderCount : 0
+      avgOrderValue: orderCount > 0 ? totalSpend / orderCount : 0,
+      hasOrdered,
     };
 
     company.notes = notes;
@@ -876,7 +967,7 @@ app.post('/api/staff', validateAuthenticatedSession, async (req, res) => {
       return res.status(403).json({ error: 'Only managers can manage staff' });
     }
 
-    const { name, email, commissionTier, role } = req.body;
+    const { name, email, commissionTier, role, pin } = req.body;
     if (!name || !email || commissionTier === undefined || !role) {
       return res.status(400).json({ error: 'name, email, commissionTier, and role required' });
     }
@@ -887,6 +978,10 @@ app.post('/api/staff', validateAuthenticatedSession, async (req, res) => {
 
     if (commissionTier < 0 || commissionTier > 100) {
       return res.status(400).json({ error: 'commissionTier must be between 0 and 100' });
+    }
+
+    if (pin !== undefined && pin !== null && pin !== '' && !/^\d{4}$/.test(String(pin))) {
+      return res.status(400).json({ error: 'Starter code must be exactly 4 digits.' });
     }
 
     const existingList = await staffStore.list();
@@ -900,6 +995,16 @@ app.post('/api/staff', validateAuthenticatedSession, async (req, res) => {
       shopifyUserId: existing?.shopifyUserId || null,
       createdAt: existing?.createdAt || new Date().toISOString(),
     });
+
+    // A manager can hand a rep a starter code (e.g. "your code is 4821") so
+    // the first Commissions visit isn't a cold "set a code" prompt — the rep
+    // can change it to something memorable later via /api/commissions/pin/change.
+    // Blank/omitted leaves an existing code untouched (an edit-staff save
+    // must not silently wipe a code the rep already set for themselves).
+    if (pin !== undefined && pin !== null && pin !== '') {
+      await staffStore.forceSetPin(record.id, hashPin(String(pin)));
+      record.hasPin = true;
+    }
 
     res.json({ staff: record });
   } catch (error) {
@@ -1067,6 +1172,160 @@ app.post('/api/companies/:companyId/assignment', validateAuthenticatedSession, a
   }
 });
 
+// Tells the frontend which of the three Commissions gate states to show:
+// no staff record yet, needs to set a code, needs to enter it, or already
+// unlocked for this browser session.
+app.get('/api/commissions/access', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+    if (!ownStaff) {
+      return res.json({ hasStaffRecord: false, hasPin: false, unlocked: false, locked: false });
+    }
+    const pinInfo = await staffStore.getPinInfo(ownStaff.id);
+    res.json({
+      hasStaffRecord: true,
+      hasPin: Boolean(pinInfo?.pinHash),
+      unlocked: req.session?.commissionsUnlockedFor === ownStaff.id,
+      locked: (pinInfo?.pinFailedAttempts || 0) >= PIN_MAX_ATTEMPTS,
+    });
+  } catch (error) {
+    console.error('GET /api/commissions/access', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// First-time code set. Only succeeds while no code exists yet — changing an
+// existing one requires a manager reset (POST /api/staff/:staffId/pin/reset),
+// by design: no self-service "forgot code" flow.
+app.post('/api/commissions/pin/set', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+    if (!ownStaff) {
+      return res.status(403).json({ error: 'Ask a manager to add you as staff before setting a code.' });
+    }
+
+    const pin = String(req.body?.pin || '');
+    if (!/^\d{4}$/.test(pin)) {
+      return res.status(400).json({ error: 'Code must be exactly 4 digits.' });
+    }
+
+    const didSet = await staffStore.setPin(ownStaff.id, hashPin(pin));
+    if (!didSet) {
+      return res.status(409).json({ error: 'A code is already set. Ask a manager to reset it if you forgot yours.' });
+    }
+
+    req.session.commissionsUnlockedFor = ownStaff.id;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('POST /api/commissions/pin/set', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Verify an existing code to unlock Commissions for the rest of this
+// browser session (the express-session cookie already expires after 24h,
+// so there's no separate expiry to track here).
+app.post('/api/commissions/pin/verify', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+    if (!ownStaff) {
+      return res.status(403).json({ error: 'Ask a manager to add you as staff before entering a code.' });
+    }
+
+    const pinInfo = await staffStore.getPinInfo(ownStaff.id);
+    if ((pinInfo?.pinFailedAttempts || 0) >= PIN_MAX_ATTEMPTS) {
+      return res.status(423).json({ error: 'Too many incorrect attempts. Ask a manager to reset your code.' });
+    }
+
+    const pin = String(req.body?.pin || '');
+    const ok = verifyPinHash(pin, pinInfo?.pinHash);
+    const attempts = await staffStore.recordPinAttempt(ownStaff.id, ok);
+
+    if (!ok) {
+      const remaining = Math.max(0, PIN_MAX_ATTEMPTS - attempts);
+      return res.status(401).json({
+        error: remaining > 0
+          ? `Incorrect code. ${remaining} attempt${remaining === 1 ? '' : 's'} left.`
+          : 'Too many incorrect attempts. Ask a manager to reset your code.',
+      });
+    }
+
+    req.session.commissionsUnlockedFor = ownStaff.id;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('POST /api/commissions/pin/verify', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Self-service change — lets a rep replace a manager-assigned starter code
+// (or any existing code) with one of their own choosing, as long as they can
+// prove the current one. Reuses the same failed-attempt counter as verify,
+// so this can't be used as a side-channel to brute-force the current code.
+app.post('/api/commissions/pin/change', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+    if (!ownStaff) {
+      return res.status(403).json({ error: 'Ask a manager to add you as staff before changing your code.' });
+    }
+
+    const pinInfo = await staffStore.getPinInfo(ownStaff.id);
+    if (!pinInfo?.pinHash) {
+      return res.status(409).json({ error: 'No code is set yet — open Commissions to set one first.' });
+    }
+    if ((pinInfo.pinFailedAttempts || 0) >= PIN_MAX_ATTEMPTS) {
+      return res.status(423).json({ error: 'Too many incorrect attempts. Ask a manager to reset your code.' });
+    }
+
+    const newPin = String(req.body?.newPin || '');
+    if (!/^\d{4}$/.test(newPin)) {
+      return res.status(400).json({ error: 'New code must be exactly 4 digits.' });
+    }
+
+    const currentPin = String(req.body?.currentPin || '');
+    const ok = verifyPinHash(currentPin, pinInfo.pinHash);
+    if (!ok) {
+      const attempts = await staffStore.recordPinAttempt(ownStaff.id, false);
+      const remaining = Math.max(0, PIN_MAX_ATTEMPTS - attempts);
+      return res.status(401).json({
+        error: remaining > 0
+          ? `Current code is incorrect. ${remaining} attempt${remaining === 1 ? '' : 's'} left.`
+          : 'Too many incorrect attempts. Ask a manager to reset your code.',
+      });
+    }
+
+    await staffStore.forceSetPin(ownStaff.id, hashPin(newPin));
+    req.session.commissionsUnlockedFor = ownStaff.id;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('POST /api/commissions/pin/change', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Manager-only: clears a staff member's code (e.g. they forgot it) so
+// they're prompted to set a new one next time they open Commissions.
+app.post('/api/staff/:staffId/pin/reset', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    if (!(await isManager(user))) {
+      return res.status(403).json({ error: 'Only managers can reset a staff code.' });
+    }
+    const didReset = await staffStore.resetPin(req.params.staffId);
+    if (!didReset) {
+      return res.status(404).json({ error: 'Staff member not found.' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('POST /api/staff/:staffId/pin/reset', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get commissions for a period (with role-based access)
 app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
   try {
@@ -1075,12 +1334,23 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
-    // Reps can only see their own commissions. Resolved up front so the
-    // per-company revenue-since-assignment fetch below (one Shopify API call
-    // per assigned company) is skipped for companies that won't be shown anyway.
-    const ownStaff = !isUserManager && user?.shopifyUserId
-      ? await staffStore.findByShopifyUserId(user.shopifyUserId)
-      : null;
+    // Resolved up front for two reasons: (1) reps can only see their own
+    // commissions, so companies not theirs are skipped before the expensive
+    // per-company revenue-since-assignment fetch below runs; (2) commissions
+    // show real pay figures, so *every* viewer — manager included — must
+    // have verified their own 4-digit code this session (see
+    // /api/commissions/pin/verify) before this endpoint returns anything.
+    const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+    if (!ownStaff) {
+      return res.status(403).json({ error: 'Ask a manager to add you as staff before viewing commissions.' });
+    }
+    if (req.session?.commissionsUnlockedFor !== ownStaff.id) {
+      const pinInfo = await staffStore.getPinInfo(ownStaff.id);
+      return res.status(403).json({
+        error: pinInfo?.pinHash ? 'Enter your 4-digit code to view commissions.' : 'Set a 4-digit code to view commissions.',
+        code: pinInfo?.pinHash ? 'PIN_REQUIRED' : 'PIN_NOT_SET',
+      });
+    }
 
     // Fetch all companies with their app-owned rep assignment and revenue
     const companies = await fetchAllCompanies(client);
@@ -1091,7 +1361,7 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
     for (const company of companies) {
       const assigned = company.assignedStaff;
       if (!assigned?.staffId) continue;
-      if (!isUserManager && assigned.staffId !== ownStaff?.id) continue;
+      if (!isUserManager && assigned.staffId !== ownStaff.id) continue;
 
       const staffRecord = await staffStore.findById(assigned.staffId);
       if (!staffRecord) continue;
@@ -1155,12 +1425,24 @@ app.get('/api/commissions/:staffId', validateAuthenticatedSession, async (req, r
     const isUserManager = await isManager(user);
     const { staffId } = req.params;
 
+    // Commissions show real pay figures, so every viewer — manager included
+    // — must have verified their own 4-digit code this session before this
+    // endpoint returns anything, on top of the existing privacy check below.
+    const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+    if (!ownStaff) {
+      return res.status(403).json({ error: 'Ask a manager to add you as staff before viewing commissions.' });
+    }
+    if (req.session?.commissionsUnlockedFor !== ownStaff.id) {
+      const pinInfo = await staffStore.getPinInfo(ownStaff.id);
+      return res.status(403).json({
+        error: pinInfo?.pinHash ? 'Enter your 4-digit code to view commissions.' : 'Set a 4-digit code to view commissions.',
+        code: pinInfo?.pinHash ? 'PIN_REQUIRED' : 'PIN_NOT_SET',
+      });
+    }
+
     // Privacy check: reps can only see their own, managers can see all
-    if (!isUserManager) {
-      const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
-      if (!ownStaff || ownStaff.id !== staffId) {
-        return res.status(403).json({ error: 'You can only view your own commissions' });
-      }
+    if (!isUserManager && ownStaff.id !== staffId) {
+      return res.status(403).json({ error: 'You can only view your own commissions' });
     }
 
     const staffRecord = await staffStore.findById(staffId);
