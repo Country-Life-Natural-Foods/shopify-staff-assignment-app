@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const fs = require('fs');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
@@ -38,24 +39,7 @@ const {
   resolveShopifyHostName,
 } = require('../lib/resolve-shopify-hostname');
 const { configureSessionStorage } = require('../lib/configure-session-storage');
-const {
-  listAppUsers,
-  upsertAppUser,
-  deleteAppUser,
-  verifyPin,
-  toHandle,
-} = require('../lib/app-users');
-const {
-  assertNotLocked,
-  recordPinFailure,
-  clearPinGuard,
-  setAppUserSession,
-  publicSession,
-  requireAppUser,
-  requireAdmin,
-} = require('../lib/admin-auth');
-const { buildReportSummary } = require('../lib/reports-data');
-const { isMissingDefinition } = require('../lib/shopify-gql');
+const { configureStaffStore } = require('../lib/staff-store');
 
 applyShopifyDeploymentEnv();
 
@@ -136,6 +120,28 @@ app.use(cookieParser());
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Fail fast instead of hanging for the full Vercel maxDuration (300s).
+// Production logs showed the embedded app's "/" route stall for the entire
+// 300 seconds and come back as a 504 when the Postgres session lookup hit a
+// connection hiccup (Neon compute slow to wake, transient network blip) —
+// the merchant just sees a blank iframe for five minutes. This guard sends a
+// prompt, retryable error well before that so Shopify Admin / the client can
+// recover in seconds instead. It doesn't fix a slow/hung DB call itself, but
+// bounds how long the merchant waits to find out something went wrong.
+const REQUEST_TIMEOUT_MS = 20000;
+app.use((req, res, next) => {
+  const timer = setTimeout(() => {
+    if (!res.headersSent) {
+      console.error(`[timeout-guard] ${req.method} ${req.originalUrl} exceeded ${REQUEST_TIMEOUT_MS}ms`);
+      res.status(503).json({ error: 'Temporarily unavailable, please retry.', code: 'TIMEOUT_GUARD' });
+    }
+  }, REQUEST_TIMEOUT_MS);
+  timer.unref?.();
+  res.on('finish', () => clearTimeout(timer));
+  res.on('close', () => clearTimeout(timer));
+  next();
+});
 
 const {
   shopifySessionStorage,
@@ -219,7 +225,6 @@ app.post(
 // Routes (before static — do not let express.static answer `/` with public/index.html; we inject App Bridge meta)
 app.get('/test-ui', (req, res) => sendAppHtmlFile(res, 'index.html'));
 app.get('/test-ui/reports', (req, res) => sendAppHtmlFile(res, 'reports.html'));
-app.get('/test-ui/staff', (req, res) => sendAppHtmlFile(res, 'staff.html'));
 
 function sendAppPage(filename) {
   return (req, res) => {
@@ -291,7 +296,6 @@ app.get(
   sendAppPage(process.env.APP_HOME_HTML || 'index.html'),
 );
 app.get('/reports', ensureInstalledOnShop, shopifyCspHeaders, sendAppPage('reports.html'));
-app.get('/staff', ensureInstalledOnShop, shopifyCspHeaders, sendAppPage('staff.html'));
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -306,6 +310,66 @@ app.get('/api/health', (req, res) => {
       : undefined,
   });
 });
+
+const staffStore = configureStaffStore({ isProduction });
+
+// Decode the App Bridge session token (already required by validateAuthenticatedSession)
+// to get a stable per-user Shopify ID. Offline sessions carry no per-user info, so this
+// JWT is the only reliable way to know *who* is making the request, not just *which shop*.
+const getShopifyUserId = async (req) => {
+  const match = req.headers.authorization?.match(/Bearer (.+)/);
+  if (!match) return null;
+  try {
+    const payload = await shopify.session.decodeSessionToken(match[1]);
+    return payload.sub || null;
+  } catch (err) {
+    console.warn('Failed to decode session token', err.message);
+    return null;
+  }
+};
+
+// Get current user from session
+const getCurrentUser = async (req, res) => {
+  const session = res.locals.shopify?.session;
+  if (!session) return null;
+  const shopifyUserId = await getShopifyUserId(req);
+  return {
+    shop: session.shop,
+    id: session.id,
+    shopifyUserId,
+  };
+};
+
+// Check if user is manager
+const isManager = async (user) => {
+  if (!user?.shopifyUserId) return false;
+  const staffRecord = await staffStore.findByShopifyUserId(user.shopifyUserId);
+  return staffRecord?.role === 'manager';
+};
+
+// Commissions show real pay figures, so viewing them needs a rep's own
+// 4-digit code on top of Shopify login — see docs on the self-claim flow
+// above staffStore.claim: identity there is self-asserted with no
+// verification, so a PIN tied to the staff record (not the Shopify login)
+// is what actually keeps someone from seeing another rep's numbers.
+const PIN_MAX_ATTEMPTS = 5;
+
+function hashPin(pin) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(pin, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPinHash(pin, stored) {
+  if (!stored) return false;
+  const [salt, hash] = stored.split(':');
+  if (!salt || !hash) return false;
+  const candidate = crypto.scryptSync(pin, salt, 64).toString('hex');
+  const a = Buffer.from(hash, 'hex');
+  const b = Buffer.from(candidate, 'hex');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
 
 const getGraphqlClient = async (req, res) => {
   const sessionData = res.locals.shopify?.session;
@@ -325,7 +389,166 @@ const throwIfGraphqlErrors = (response, label) => {
   }
 };
 
-// Fetch real companies with performance data
+function decodeRouteParam(value) {
+  if (!value || typeof value !== 'string') return value;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+// Lightweight single-company read, used only to check the current assignment
+// before allowing a rep to self-assign/release (avoids re-fetching every
+// company + its orders just to authorize one write).
+const getCompanyAssignedStaff = async (client, companyId) => {
+  const query = `
+    query getCompanyAssignment($id: ID!) {
+      company(id: $id) {
+        id
+        metafield(namespace: "clnf", key: "assigned_staff") {
+          value
+        }
+      }
+    }
+  `;
+  const response = await client.query({ data: { query, variables: { id: companyId } } });
+  throwIfGraphqlErrors(response, 'fetch company assignment');
+  const value = response.body?.data?.company?.metafield?.value;
+  if (!value) return null;
+  try {
+    return JSON.parse(value) || null;
+  } catch (e) {
+    return null;
+  }
+};
+
+const getCompanyAssignedStaffId = async (client, companyId) => {
+  const assigned = await getCompanyAssignedStaff(client, companyId);
+  return assigned?.staffId || null;
+};
+
+// Metafields are written via the resource-agnostic metafieldsSet mutation.
+// (companyUpdate's CompanyInput no longer accepts an `id` or `metafields` field.)
+const setCompanyMetafield = async (client, companyId, key, value) => {
+  const mutation = `
+    mutation setCompanyMetafields($metafields: [MetafieldsSetInput!]!) {
+      metafieldsSet(metafields: $metafields) {
+        metafields {
+          id
+          key
+          value
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  const response = await client.query({
+    data: {
+      query: mutation,
+      variables: {
+        metafields: [
+          {
+            ownerId: companyId,
+            namespace: 'clnf',
+            key,
+            type: 'json',
+            value,
+          },
+        ],
+      },
+    },
+  });
+
+  throwIfGraphqlErrors(response, `set company metafield ${key}`);
+  const userErrors = response.body?.data?.metafieldsSet?.userErrors;
+  if (userErrors && userErrors.length > 0) {
+    throw new Error(userErrors.map((e) => e.message).join('; '));
+  }
+};
+
+// Helper: calculate days between orders and stats
+const calculateOrderStats = (orderDates) => {
+  if (!orderDates || orderDates.length === 0) {
+    return { lastOrderDate: null, daysSinceLastOrder: null, avgDaysBetweenOrders: null };
+  }
+
+  const dates = orderDates.map(d => new Date(d)).sort((a, b) => b - a);
+  const lastOrderDate = dates[0];
+  const now = new Date();
+  const daysSinceLastOrder = Math.floor((now - lastOrderDate) / (1000 * 60 * 60 * 24));
+
+  let avgDaysBetweenOrders = null;
+  if (dates.length >= 2) {
+    const gaps = [];
+    for (let i = 0; i < dates.length - 1; i++) {
+      const gap = (dates[i] - dates[i + 1]) / (1000 * 60 * 60 * 24);
+      gaps.push(gap);
+    }
+    avgDaysBetweenOrders = Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length);
+  }
+
+  return { lastOrderDate: lastOrderDate.toISOString(), daysSinceLastOrder, avgDaysBetweenOrders };
+};
+
+// Company.orders only lists orders whose purchasingEntity is the B2B company.
+// Wholesale contacts often keep ordering as regular customers (draft invoices,
+// online store), so Company.totalSpent / a contact's lastOrder can be populated
+// while Company.orders is empty. Using only Company.orders for the CRM badge
+// then shows "Never" next to a growing spend total.
+const uniqueContactCustomers = (company) => {
+  const raw = [
+    company.mainContact?.customer,
+    ...(company.contacts?.edges || []).map((edge) => edge?.node?.customer),
+  ].filter(Boolean);
+  const seen = new Set();
+  const customers = [];
+  for (const customer of raw) {
+    const key = customer.id || `anon-${customers.length}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    customers.push(customer);
+  }
+  return customers;
+};
+
+const contactOrderStats = (company) => {
+  const customers = uniqueContactCustomers(company);
+  let maxOrders = 0;
+  const lastOrderDates = [];
+  for (const customer of customers) {
+    const n = parseInt(customer.numberOfOrders, 10);
+    if (Number.isFinite(n) && n > maxOrders) maxOrders = n;
+    if (customer.lastOrder?.createdAt) lastOrderDates.push(customer.lastOrder.createdAt);
+  }
+  return { maxOrders, lastOrderDates };
+};
+
+// Fetch real companies with performance data.
+//
+// totalSpent/ordersCount come straight from Shopify's own Company aggregates —
+// accurate regardless of order volume. An earlier version of this query tried
+// to compute these itself via the top-level `orders(query: "company_id:X")`
+// search filter, but `company_id` isn't a real order search field: Shopify
+// silently ignored it and returned the shop's most recent orders overall for
+// every company (hence identical "last order: today" results with numbers
+// that weren't actually that company's).
+//
+// recentOrders (Company.orders) is scoped correctly by construction — it's a
+// connection *on the company*, not a top-level search filter — and per
+// shopify.dev's Order reference it needs `read_orders` OR read_marketplace_orders
+// OR read_quick_sale (not all three; a prior version of this query added the
+// latter two "in addition to" read_orders, which was never necessary and is
+// what triggered an infinite reauth loop — see the revert of that change).
+// read_orders is already in this app's scope list below and was never removed,
+// so no scope/reauth change is needed for this field.
+//
+// Contact customer.lastOrder fills in cadence when Company.orders is empty but
+// the linked buyer accounts have real order history (see uniqueContactCustomers).
 const fetchAllCompanies = async (client) => {
   if (!client) return [];
   const query = `
@@ -337,34 +560,50 @@ const fetchAllCompanies = async (client) => {
             name
             externalId
             createdAt
+            customerSince
             updatedAt
-            locations(first: 10) {
+            totalSpent {
+              amount
+              currencyCode
+            }
+            ordersCount {
+              count
+            }
+            recentOrders: orders(first: 10, reverse: true) {
               edges {
                 node {
-                  id
-                  name
-                  shippingAddress {
-                    address1
-                    city
-                    province
-                    country
-                    zip
-                  }
-                  staffMemberAssignments(first: 50) {
-                    edges {
-                      node {
-                        id
-                        staffMember {
-                          id
-                          firstName
-                          lastName
-                          email
-                        }
-                      }
+                  createdAt
+                }
+              }
+            }
+            mainContact {
+              customer {
+                id
+                numberOfOrders
+                lastOrder {
+                  createdAt
+                }
+              }
+            }
+            contacts(first: 10) {
+              edges {
+                node {
+                  customer {
+                    id
+                    numberOfOrders
+                    lastOrder {
+                      createdAt
                     }
                   }
                 }
               }
+            }
+            metafield(namespace: "clnf", key: "crm_notes") {
+              value
+            }
+            assignedStaffMetafield: metafield(namespace: "clnf", key: "assigned_staff") {
+              value
+              updatedAt
             }
           }
         }
@@ -375,6 +614,67 @@ const fetchAllCompanies = async (client) => {
       }
     }
   `;
+
+  const enrichCompany = (company) => {
+
+    const totalSpend = parseFloat(company.totalSpent?.amount || '0') || 0;
+    const companyOrderCount = company.ordersCount?.count || 0;
+    const companyOrderDates = (company.recentOrders?.edges || [])
+      .map((e) => e?.node?.createdAt)
+      .filter(Boolean);
+    const contacts = contactOrderStats(company);
+    const orderCount = Math.max(companyOrderCount, contacts.maxOrders);
+    const orderDates = [...companyOrderDates, ...contacts.lastOrderDates];
+    const orderStats = calculateOrderStats(orderDates);
+    const hasOrdered = orderCount > 0 || totalSpend > 0 || Boolean(orderStats.lastOrderDate);
+
+    // Parse notes from metafield
+    let notes = [];
+    try {
+      const notesValue = company.metafield?.value;
+      if (notesValue) {
+        notes = JSON.parse(notesValue);
+        if (!Array.isArray(notes)) notes = [];
+      }
+    } catch (e) {
+      console.warn('Failed to parse notes for company', company.id, e.message);
+    }
+
+    // Parse assigned rep from metafield (app-owned; Shopify's native staff
+    // assignments require the protected read_users scope, which this app doesn't have)
+    let assignedStaff = null;
+    try {
+      const assignedValue = company.assignedStaffMetafield?.value;
+      if (assignedValue) {
+        assignedStaff = JSON.parse(assignedValue);
+        // Assignments written before commission math was tied to an assignment
+        // date won't have `assignedAt` in the JSON. Fall back to the metafield's
+        // own updatedAt (when Shopify last saw this assignment change) so those
+        // reps aren't retroactively credited with the company's entire order
+        // history — see fetchCompanyRevenueSince.
+        if (assignedStaff && !assignedStaff.assignedAt) {
+          assignedStaff.assignedAt = company.assignedStaffMetafield?.updatedAt || null;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse assigned staff for company', company.id, e.message);
+    }
+
+    company.performance = {
+      totalSpend,
+      orderCount,
+      lastOrderDate: orderStats.lastOrderDate,
+      daysSinceLastOrder: orderStats.daysSinceLastOrder,
+      avgDaysBetweenOrders: orderStats.avgDaysBetweenOrders,
+      avgOrderValue: orderCount > 0 ? totalSpend / orderCount : 0,
+      hasOrdered,
+    };
+
+    company.notes = notes;
+    company.assignedStaff = assignedStaff;
+
+    return company;
+  };
 
   let hasNextPage = true;
   let cursor = null;
@@ -392,67 +692,85 @@ const fetchAllCompanies = async (client) => {
     const edges = companiesData.edges || [];
     const pageInfo = companiesData.pageInfo || { hasNextPage: false, endCursor: null };
 
-    // For each company, fetch orders to calculate performance
-    for (const edge of edges) {
-      const company = edge.node;
-      if (company.locations == null) {
-        company.locations = { edges: [] };
-      }
-
-      let totalSpend = 0;
-      let orderCount = 0;
-      let lastOrderDate = null;
-      try {
-        const ordersQuery = `
-        query getCompanyOrders($query: String!) {
-          orders(first: 100, query: $query) {
-            edges {
-              node {
-                totalPriceSet {
-                  shopMoney {
-                    amount
-                  }
-                }
-                createdAt
-              }
-            }
-          }
-        }
-      `;
-
-        const ordersResponse = await client.query({
-          data: {
-            query: ordersQuery,
-            variables: { query: `company_id:${company.id.split('/').pop()}` }
-          }
-        });
-        throwIfGraphqlErrors(ordersResponse, 'orders');
-        const orderEdges = ordersResponse.body?.data?.orders?.edges;
-        const orders = orderEdges ? orderEdges.map((e) => e.node) : [];
-        totalSpend = orders.reduce((sum, order) => {
-          const amt = order?.totalPriceSet?.shopMoney?.amount;
-          return sum + (amt != null ? parseFloat(amt) : 0);
-        }, 0);
-        orderCount = orders.length;
-        lastOrderDate = orders.length > 0 ? orders[0].createdAt : null;
-      } catch (orderErr) {
-        console.warn('orders for company', company.id, orderErr.message);
-      }
-
-      company.performance = {
-        totalSpend,
-        orderCount,
-        lastOrderDate,
-        avgOrderValue: orderCount > 0 ? totalSpend / orderCount : 0
-      };
-
-      all.push(company);
-    }
+    all.push(...edges.map((edge) => enrichCompany(edge.node)));
 
     hasNextPage = Boolean(pageInfo.hasNextPage);
     cursor = pageInfo.endCursor || null;
   }
   return all;
+};
+
+// Commission payouts are earned on a rep's *own* work, not whatever the
+// company happened to spend before they were assigned. This walks the
+// company's orders newest-first and sums only the ones placed on/after
+// `sinceIso` (the assignment date), stopping as soon as it reaches an order
+// older than that cutoff — no need to paginate further once we're past it.
+// A null/undefined `sinceIso` (shouldn't normally happen — see enrichCompany's
+// assignedAt backfill) falls back to lifetime revenue rather than crediting nothing.
+//
+// `untilIso`, when given, caps the other end (used for monthly reports, which
+// need "this rep's revenue *during* July" rather than "since assignment to
+// today"). Orders newer than `untilIso` are skipped, not treated as a stop
+// condition — pagination continues past them until it reaches the window.
+const fetchCompanyRevenueSince = async (client, companyId, sinceIso, untilIso = null) => {
+  const sinceTime = sinceIso ? new Date(sinceIso).getTime() : null;
+  const untilTime = untilIso ? new Date(untilIso).getTime() : null;
+  const query = `
+    query getCompanyOrdersSince($id: ID!, $first: Int!, $after: String) {
+      company(id: $id) {
+        orders(first: $first, after: $after, sortKey: CREATED_AT, reverse: true) {
+          edges {
+            node {
+              createdAt
+              currentTotalPriceSet {
+                shopMoney {
+                  amount
+                }
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  `;
+
+  let cursor = null;
+  let hasNextPage = true;
+  let totalSpend = 0;
+  let orderCount = 0;
+  let lastOrderDate = null;
+
+  while (hasNextPage) {
+    const response = await client.query({
+      data: { query, variables: { id: companyId, first: 100, after: cursor } },
+    });
+    throwIfGraphqlErrors(response, 'company orders since assignment');
+    const ordersData = response.body?.data?.company?.orders;
+    if (!ordersData) break;
+
+    for (const edge of ordersData.edges || []) {
+      const createdAt = edge.node.createdAt;
+      const createdTime = new Date(createdAt).getTime();
+      if (sinceTime !== null && createdTime < sinceTime) {
+        return { totalSpend, orderCount, lastOrderDate };
+      }
+      if (untilTime !== null && createdTime > untilTime) {
+        continue;
+      }
+      totalSpend += parseFloat(edge.node.currentTotalPriceSet?.shopMoney?.amount || '0') || 0;
+      orderCount += 1;
+      if (!lastOrderDate || createdAt > lastOrderDate) lastOrderDate = createdAt;
+    }
+
+    hasNextPage = Boolean(ordersData.pageInfo?.hasNextPage);
+    cursor = ordersData.pageInfo?.endCursor || null;
+  }
+
+  return { totalSpend, orderCount, lastOrderDate };
 };
 
 // API Endpoints
@@ -467,6 +785,931 @@ app.get('/api/companies', validateAuthenticatedSession, async (req, res) => {
       return sendShopifyApiError(res, error);
     }
     console.error('GET /api/companies', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get notes for a specific company
+app.get('/api/companies/:companyId/notes', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const companyId = decodeRouteParam(req.params.companyId);
+    const query = `
+      query getCompanyNotes($id: ID!) {
+        company(id: $id) {
+          id
+          metafield(namespace: "clnf", key: "crm_notes") {
+            value
+          }
+        }
+      }
+    `;
+
+    const response = await client.query({
+      data: { query, variables: { id: companyId } },
+    });
+    throwIfGraphqlErrors(response, 'company notes');
+
+    if (!response.body?.data?.company) {
+      return res.json({ notes: [] });
+    }
+
+    let notes = [];
+    const metafield = response.body?.data?.company?.metafield;
+    if (metafield?.value) {
+      try {
+        notes = JSON.parse(metafield.value);
+        if (!Array.isArray(notes)) notes = [];
+      } catch (e) {
+        console.warn('Failed to parse notes', e.message);
+      }
+    }
+
+    res.json({ notes });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/companies/:companyId/notes', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add a note to a company
+app.post('/api/companies/:companyId/notes', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const companyId = decodeRouteParam(req.params.companyId);
+    const { body, author } = req.body;
+
+    if (!body || !author) {
+      return res.status(400).json({ error: 'body and author required' });
+    }
+
+    // Fetch existing notes
+    const getQuery = `
+      query getCompanyNotes($id: ID!) {
+        company(id: $id) {
+          id
+          metafield(namespace: "clnf", key: "crm_notes") {
+            value
+          }
+        }
+      }
+    `;
+
+    const getResponse = await client.query({
+      data: { query: getQuery, variables: { id: companyId } },
+    });
+    throwIfGraphqlErrors(getResponse, 'fetch company notes');
+
+    let notes = [];
+    const metafield = getResponse.body?.data?.company?.metafield;
+    if (metafield?.value) {
+      try {
+        notes = JSON.parse(metafield.value);
+        if (!Array.isArray(notes)) notes = [];
+      } catch (e) {
+        notes = [];
+      }
+    }
+
+    // Create new note
+    const newNote = {
+      id: `note_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      body,
+      author,
+      createdAt: new Date().toISOString()
+    };
+
+    notes.unshift(newNote);
+
+    await setCompanyMetafield(client, companyId, 'crm_notes', JSON.stringify(notes));
+
+    res.json({ note: newNote });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('POST /api/companies/:companyId/notes', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete a note from a company
+app.delete('/api/companies/:companyId/notes/:noteId', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const companyId = decodeRouteParam(req.params.companyId);
+    const noteId = decodeRouteParam(req.params.noteId);
+
+    // Fetch existing notes
+    const getQuery = `
+      query getCompanyNotes($id: ID!) {
+        company(id: $id) {
+          id
+          metafield(namespace: "clnf", key: "crm_notes") {
+            value
+          }
+        }
+      }
+    `;
+
+    const getResponse = await client.query({
+      data: { query: getQuery, variables: { id: companyId } },
+    });
+    throwIfGraphqlErrors(getResponse, 'fetch company notes');
+
+    let notes = [];
+    const metafield = getResponse.body?.data?.company?.metafield;
+    if (metafield?.value) {
+      try {
+        notes = JSON.parse(metafield.value);
+        if (!Array.isArray(notes)) notes = [];
+      } catch (e) {
+        notes = [];
+      }
+    }
+
+    // Remove the note
+    notes = notes.filter(n => n.id !== noteId);
+
+    await setCompanyMetafield(client, companyId, 'crm_notes', JSON.stringify(notes));
+
+    res.json({ success: true });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('DELETE /api/companies/:companyId/notes/:noteId', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// STAFF MANAGEMENT ENDPOINTS
+
+// Get all staff (managers only) or current user's staff info
+app.get('/api/staff', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const isUserManager = await isManager(user);
+
+    if (isUserManager) {
+      // Managers see all staff
+      res.json({ staff: await staffStore.list() });
+    } else {
+      // Reps see only their own linked record, if any
+      const staffMember = await staffStore.findByShopifyUserId(user?.shopifyUserId);
+      res.json({ staff: staffMember ? [staffMember] : [] });
+    }
+  } catch (error) {
+    console.error('GET /api/staff', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create/update staff member (managers only)
+app.post('/api/staff', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    if (!(await isManager(user))) {
+      return res.status(403).json({ error: 'Only managers can manage staff' });
+    }
+
+    const { name, email, commissionTier, role, pin } = req.body;
+    if (!name || !email || commissionTier === undefined || !role) {
+      return res.status(400).json({ error: 'name, email, commissionTier, and role required' });
+    }
+
+    if (!['manager', 'rep'].includes(role)) {
+      return res.status(400).json({ error: 'role must be "manager" or "rep"' });
+    }
+
+    if (commissionTier < 0 || commissionTier > 100) {
+      return res.status(400).json({ error: 'commissionTier must be between 0 and 100' });
+    }
+
+    if (pin !== undefined && pin !== null && pin !== '' && !/^\d{4}$/.test(String(pin))) {
+      return res.status(400).json({ error: 'Starter code must be exactly 4 digits.' });
+    }
+
+    const existingList = await staffStore.list();
+    const existing = existingList.find((s) => s.email === email);
+    const record = await staffStore.upsert({
+      id: existing?.id || `staff_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name,
+      email,
+      commissionTier,
+      role,
+      shopifyUserId: existing?.shopifyUserId || null,
+      createdAt: existing?.createdAt || new Date().toISOString(),
+    });
+
+    // A manager can hand a rep a starter code (e.g. "your code is 4821") so
+    // the first Commissions visit isn't a cold "set a code" prompt — the rep
+    // can change it to something memorable later via /api/commissions/pin/change.
+    // Blank/omitted leaves an existing code untouched (an edit-staff save
+    // must not silently wipe a code the rep already set for themselves).
+    if (pin !== undefined && pin !== null && pin !== '') {
+      await staffStore.forceSetPin(record.id, hashPin(String(pin)));
+      record.hasPin = true;
+    }
+
+    res.json({ staff: record });
+  } catch (error) {
+    console.error('POST /api/staff', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete staff member (managers only)
+app.delete('/api/staff/:staffId', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    if (!(await isManager(user))) {
+      return res.status(403).json({ error: 'Only managers can manage staff' });
+    }
+
+    const { staffId } = req.params;
+    const removed = await staffStore.remove(staffId);
+    if (!removed) {
+      return res.status(404).json({ error: 'Staff member not found' });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('DELETE /api/staff/:staffId', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// One-time bootstrap: the first authenticated user can claim the manager role
+// while no manager exists yet. After that, admin management happens via the
+// Staff Management UI.
+app.post('/api/staff/claim-admin', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    if (!user?.shopifyUserId) {
+      return res.status(400).json({ error: 'Could not identify your Shopify account from this session.' });
+    }
+    if (await staffStore.hasManager()) {
+      return res.status(409).json({ error: 'An admin has already been set up for this app. Ask them to add you as staff.' });
+    }
+
+    const { name } = req.body || {};
+    const record = await staffStore.upsert({
+      id: `staff_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: name || 'Admin',
+      email: '',
+      commissionTier: 0,
+      role: 'manager',
+      shopifyUserId: user.shopifyUserId,
+      createdAt: new Date().toISOString(),
+    });
+
+    res.json({ staff: record });
+  } catch (error) {
+    console.error('POST /api/staff/claim-admin', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// A manager adding a rep via POST /api/staff only knows their name/email —
+// there's no scope-safe way for the app to look up which Shopify login that
+// corresponds to, so the record is created with shopifyUserId unset. These two
+// endpoints let the rep self-identify and link their own login to it, the same
+// way claim-admin bootstraps the first manager.
+app.get('/api/staff/unclaimed', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const unclaimed = await staffStore.findUnclaimed();
+    res.json({ staff: unclaimed.map((s) => ({ id: s.id, name: s.name, role: s.role })) });
+  } catch (error) {
+    console.error('GET /api/staff/unclaimed', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/staff/:staffId/claim', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    if (!user?.shopifyUserId) {
+      return res.status(400).json({ error: 'Could not identify your Shopify account from this session.' });
+    }
+
+    const already = await staffStore.findByShopifyUserId(user.shopifyUserId);
+    if (already) {
+      return res.status(409).json({ error: 'This Shopify login is already linked to a staff record.' });
+    }
+
+    const { staffId } = req.params;
+    const record = await staffStore.claim(staffId, user.shopifyUserId);
+    if (!record) {
+      return res.status(409).json({ error: 'That staff record was not found or has already been claimed.' });
+    }
+
+    res.json({ staff: record });
+  } catch (error) {
+    console.error('POST /api/staff/:staffId/claim', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Lightweight endpoint for the frontend to check role + whether admin bootstrap is needed
+app.get('/api/session-info', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const isUserManager = await isManager(user);
+    const hasAnyManager = await staffStore.hasManager();
+    res.json({ isManager: isUserManager, hasAnyManager, shop: user?.shop || null });
+  } catch (error) {
+    console.error('GET /api/session-info', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Assign (or clear) which staff member is responsible for a company.
+// Managers can assign/reassign anyone. Reps can only claim an unassigned
+// company for themselves, or release their own assignment.
+app.post('/api/companies/:companyId/assignment', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const isUserManager = await isManager(user);
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const companyId = decodeRouteParam(req.params.companyId);
+    const { staffId } = req.body;
+
+    const currentAssignment = await getCompanyAssignedStaff(client, companyId);
+
+    let assignedStaff = null;
+    if (staffId) {
+      const staffRecord = await staffStore.findById(staffId);
+      if (!staffRecord) return res.status(400).json({ error: 'Unknown staff member' });
+      // Only reset the commission clock when the rep actually changes — a
+      // no-op re-save of the same rep must not zero out revenue they've
+      // already earned credit for since their real assignment date.
+      const assignedAt = currentAssignment?.staffId === staffId && currentAssignment?.assignedAt
+        ? currentAssignment.assignedAt
+        : new Date().toISOString();
+      assignedStaff = { staffId: staffRecord.id, name: staffRecord.name, email: staffRecord.email, assignedAt };
+    }
+
+    if (!isUserManager) {
+      const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+      if (!ownStaff) {
+        return res.status(403).json({ error: 'Ask a manager to add you as staff before you can assign yourself to companies' });
+      }
+      if (staffId && staffId !== ownStaff.id) {
+        return res.status(403).json({ error: 'You can only assign yourself' });
+      }
+
+      if (currentAssignment?.staffId && currentAssignment.staffId !== ownStaff.id) {
+        return res.status(403).json({ error: 'This company is already assigned to another rep. Ask a manager to reassign it.' });
+      }
+    }
+
+    await setCompanyMetafield(client, companyId, 'assigned_staff', JSON.stringify(assignedStaff));
+
+    res.json({ success: true, assignedStaff });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('POST /api/companies/:companyId/assignment', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Tells the frontend which of the three Commissions gate states to show:
+// no staff record yet, needs to set a code, needs to enter it, or already
+// unlocked for this browser session.
+app.get('/api/commissions/access', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+    if (!ownStaff) {
+      return res.json({ hasStaffRecord: false, hasPin: false, unlocked: false, locked: false });
+    }
+    const pinInfo = await staffStore.getPinInfo(ownStaff.id);
+    res.json({
+      hasStaffRecord: true,
+      hasPin: Boolean(pinInfo?.pinHash),
+      unlocked: req.session?.commissionsUnlockedFor === ownStaff.id,
+      locked: (pinInfo?.pinFailedAttempts || 0) >= PIN_MAX_ATTEMPTS,
+    });
+  } catch (error) {
+    console.error('GET /api/commissions/access', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// First-time code set. Only succeeds while no code exists yet — changing an
+// existing one requires a manager reset (POST /api/staff/:staffId/pin/reset),
+// by design: no self-service "forgot code" flow.
+app.post('/api/commissions/pin/set', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+    if (!ownStaff) {
+      return res.status(403).json({ error: 'Ask a manager to add you as staff before setting a code.' });
+    }
+
+    const pin = String(req.body?.pin || '');
+    if (!/^\d{4}$/.test(pin)) {
+      return res.status(400).json({ error: 'Code must be exactly 4 digits.' });
+    }
+
+    const didSet = await staffStore.setPin(ownStaff.id, hashPin(pin));
+    if (!didSet) {
+      return res.status(409).json({ error: 'A code is already set. Ask a manager to reset it if you forgot yours.' });
+    }
+
+    req.session.commissionsUnlockedFor = ownStaff.id;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('POST /api/commissions/pin/set', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Verify an existing code to unlock Commissions for the rest of this
+// browser session (the express-session cookie already expires after 24h,
+// so there's no separate expiry to track here).
+app.post('/api/commissions/pin/verify', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+    if (!ownStaff) {
+      return res.status(403).json({ error: 'Ask a manager to add you as staff before entering a code.' });
+    }
+
+    const pinInfo = await staffStore.getPinInfo(ownStaff.id);
+    if ((pinInfo?.pinFailedAttempts || 0) >= PIN_MAX_ATTEMPTS) {
+      return res.status(423).json({ error: 'Too many incorrect attempts. Ask a manager to reset your code.' });
+    }
+
+    const pin = String(req.body?.pin || '');
+    const ok = verifyPinHash(pin, pinInfo?.pinHash);
+    const attempts = await staffStore.recordPinAttempt(ownStaff.id, ok);
+
+    if (!ok) {
+      const remaining = Math.max(0, PIN_MAX_ATTEMPTS - attempts);
+      return res.status(401).json({
+        error: remaining > 0
+          ? `Incorrect code. ${remaining} attempt${remaining === 1 ? '' : 's'} left.`
+          : 'Too many incorrect attempts. Ask a manager to reset your code.',
+      });
+    }
+
+    req.session.commissionsUnlockedFor = ownStaff.id;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('POST /api/commissions/pin/verify', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Self-service change — lets a rep replace a manager-assigned starter code
+// (or any existing code) with one of their own choosing, as long as they can
+// prove the current one. Reuses the same failed-attempt counter as verify,
+// so this can't be used as a side-channel to brute-force the current code.
+app.post('/api/commissions/pin/change', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+    if (!ownStaff) {
+      return res.status(403).json({ error: 'Ask a manager to add you as staff before changing your code.' });
+    }
+
+    const pinInfo = await staffStore.getPinInfo(ownStaff.id);
+    if (!pinInfo?.pinHash) {
+      return res.status(409).json({ error: 'No code is set yet — open Commissions to set one first.' });
+    }
+    if ((pinInfo.pinFailedAttempts || 0) >= PIN_MAX_ATTEMPTS) {
+      return res.status(423).json({ error: 'Too many incorrect attempts. Ask a manager to reset your code.' });
+    }
+
+    const newPin = String(req.body?.newPin || '');
+    if (!/^\d{4}$/.test(newPin)) {
+      return res.status(400).json({ error: 'New code must be exactly 4 digits.' });
+    }
+
+    const currentPin = String(req.body?.currentPin || '');
+    const ok = verifyPinHash(currentPin, pinInfo.pinHash);
+    if (!ok) {
+      const attempts = await staffStore.recordPinAttempt(ownStaff.id, false);
+      const remaining = Math.max(0, PIN_MAX_ATTEMPTS - attempts);
+      return res.status(401).json({
+        error: remaining > 0
+          ? `Current code is incorrect. ${remaining} attempt${remaining === 1 ? '' : 's'} left.`
+          : 'Too many incorrect attempts. Ask a manager to reset your code.',
+      });
+    }
+
+    await staffStore.forceSetPin(ownStaff.id, hashPin(newPin));
+    req.session.commissionsUnlockedFor = ownStaff.id;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('POST /api/commissions/pin/change', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Manager-only: clears a staff member's code (e.g. they forgot it) so
+// they're prompted to set a new one next time they open Commissions.
+app.post('/api/staff/:staffId/pin/reset', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    if (!(await isManager(user))) {
+      return res.status(403).json({ error: 'Only managers can reset a staff code.' });
+    }
+    const didReset = await staffStore.resetPin(req.params.staffId);
+    if (!didReset) {
+      return res.status(404).json({ error: 'Staff member not found.' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('POST /api/staff/:staffId/pin/reset', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Resolves a "YYYY-MM" query param to a calendar-month window. Reports are
+// meant to be pulled on the 1st to look back at the month that just closed,
+// so no param at all defaults to *last* month, not the current (still-open) one.
+function resolveReportMonth(monthParam) {
+  let year;
+  let month; // 1-12
+  if (monthParam && /^\d{4}-\d{2}$/.test(monthParam)) {
+    [year, month] = monthParam.split('-').map(Number);
+  } else {
+    const now = new Date();
+    year = now.getUTCFullYear();
+    month = now.getUTCMonth(); // 0-based current month == 1-based previous month
+    if (month === 0) {
+      month = 12;
+      year -= 1;
+    }
+  }
+  const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
+  const end = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+  const label = start.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  return { month: monthStr, label, start, end };
+}
+
+// Shared by the JSON and CSV report endpoints below. Reports are a
+// manager-only, finance-facing view of everyone's pay, so — same as
+// Commissions — the viewer (manager included) must have verified their own
+// 4-digit code this session before any figures come back.
+async function buildCommissionReport(req, res, monthParam) {
+  const user = await getCurrentUser(req, res);
+  const isUserManager = await isManager(user);
+  if (!isUserManager) {
+    return { status: 403, error: 'Only managers can view commission reports.' };
+  }
+
+  const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+  if (!ownStaff) {
+    return { status: 403, error: 'Ask a manager to add you as staff before viewing reports.' };
+  }
+  if (req.session?.commissionsUnlockedFor !== ownStaff.id) {
+    const pinInfo = await staffStore.getPinInfo(ownStaff.id);
+    return {
+      status: 403,
+      error: pinInfo?.pinHash ? 'Enter your 4-digit code to view reports.' : 'Set a 4-digit code to view reports.',
+      code: pinInfo?.pinHash ? 'PIN_REQUIRED' : 'PIN_NOT_SET',
+    };
+  }
+
+  const client = await getGraphqlClient(req, res);
+  if (!client) return { status: 401, error: 'Unauthorized' };
+
+  const period = resolveReportMonth(monthParam);
+  const companies = await fetchAllCompanies(client);
+  const allStaff = await staffStore.list();
+
+  // Every staff member gets an entry — including reps with $0 this period —
+  // so finance sees a complete roster rather than wondering if someone was
+  // missed off the export.
+  const repsMap = {};
+  for (const staffRecord of allStaff) {
+    repsMap[staffRecord.id] = {
+      staffId: staffRecord.id,
+      name: staffRecord.name,
+      email: staffRecord.email,
+      commissionTier: staffRecord.commissionTier,
+      companies: [],
+      totalRevenue: 0,
+      totalCommission: 0,
+    };
+  }
+
+  for (const company of companies) {
+    const assigned = company.assignedStaff;
+    const rep = assigned?.staffId ? repsMap[assigned.staffId] : null;
+    if (!rep) continue;
+
+    const assignedAt = assigned.assignedAt ? new Date(assigned.assignedAt) : null;
+    const effectiveSince = assignedAt && assignedAt > period.start ? assignedAt : period.start;
+    if (effectiveSince > period.end) continue; // assigned after this period closed — nothing earned yet
+
+    const revenueSince = await fetchCompanyRevenueSince(
+      client,
+      company.id,
+      effectiveSince.toISOString(),
+      period.end.toISOString(),
+    );
+    const revenue = revenueSince.totalSpend;
+    const commission = (revenue * rep.commissionTier) / 100;
+
+    rep.companies.push({
+      companyId: company.id,
+      companyName: company.name,
+      revenue,
+      commission,
+      assignedAt: assigned.assignedAt || null,
+    });
+    rep.totalRevenue += revenue;
+    rep.totalCommission += commission;
+  }
+
+  const reps = Object.values(repsMap).sort((a, b) => b.totalCommission - a.totalCommission);
+  const totals = reps.reduce(
+    (acc, r) => {
+      acc.totalRevenue += r.totalRevenue;
+      acc.totalCommission += r.totalCommission;
+      return acc;
+    },
+    { totalRevenue: 0, totalCommission: 0 },
+  );
+
+  return {
+    status: 200,
+    period: {
+      month: period.month,
+      label: period.label,
+      start: period.start.toISOString(),
+      end: period.end.toISOString(),
+    },
+    reps,
+    totals,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+app.get('/api/reports/commissions', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const report = await buildCommissionReport(req, res, req.query.month);
+    if (report.status !== 200) {
+      return res.status(report.status).json({ error: report.error, code: report.code });
+    }
+    const { status, ...body } = report;
+    res.json(body);
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/reports/commissions', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// CSV rather than a server-rendered PDF: it's zero new dependencies (no
+// headless-browser/PDF library to keep working on Vercel's serverless
+// runtime), and it opens directly in whatever finance already uses
+// (Excel/Sheets) instead of a fixed layout they'd have to re-key. The
+// reports.html page itself is print-styled for a "Save as PDF" option
+// when a formatted one-pager is what's actually wanted.
+function csvField(value) {
+  const str = String(value ?? '');
+  return /[",\r\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+app.get('/api/reports/commissions/export.csv', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const report = await buildCommissionReport(req, res, req.query.month);
+    if (report.status !== 200) {
+      return res.status(report.status).json({ error: report.error, code: report.code });
+    }
+
+    // Same caveat shown on the report page — the "Commission Rate %" column
+    // below is each rep's tier as of *right now*, not a historical snapshot,
+    // so a tier change after this period closed isn't reflected retroactively.
+    const rows = [
+      [`Note: Commission Rate % reflects each rep's tier as of ${new Date().toLocaleDateString('en-US')}, not necessarily what was in effect during ${report.period.label}.`],
+      [],
+      ['Rep', 'Email', 'Company', 'Revenue', 'Commission Rate %', 'Commission Owed', 'Assigned Since'],
+    ];
+    for (const rep of report.reps) {
+      if (rep.companies.length === 0) {
+        rows.push([rep.name, rep.email, '(no companies assigned)', '0.00', rep.commissionTier, '0.00', '']);
+      } else {
+        for (const c of rep.companies) {
+          rows.push([
+            rep.name,
+            rep.email,
+            c.companyName,
+            c.revenue.toFixed(2),
+            rep.commissionTier,
+            c.commission.toFixed(2),
+            c.assignedAt ? new Date(c.assignedAt).toLocaleDateString('en-US') : '',
+          ]);
+        }
+      }
+      rows.push([`${rep.name} — Total`, '', '', rep.totalRevenue.toFixed(2), '', rep.totalCommission.toFixed(2), '']);
+    }
+    rows.push(['GRAND TOTAL', '', '', report.totals.totalRevenue.toFixed(2), '', report.totals.totalCommission.toFixed(2), '']);
+
+    const csv = rows.map((row) => row.map(csvField).join(',')).join('\r\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="commissions-${report.period.month}.csv"`);
+    res.send(csv);
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/reports/commissions/export.csv', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get commissions for a period (with role-based access)
+app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const isUserManager = await isManager(user);
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    // Resolved up front for two reasons: (1) reps can only see their own
+    // commissions, so companies not theirs are skipped before the expensive
+    // per-company revenue-since-assignment fetch below runs; (2) commissions
+    // show real pay figures, so *every* viewer — manager included — must
+    // have verified their own 4-digit code this session (see
+    // /api/commissions/pin/verify) before this endpoint returns anything.
+    const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+    if (!ownStaff) {
+      return res.status(403).json({ error: 'Ask a manager to add you as staff before viewing commissions.' });
+    }
+    if (req.session?.commissionsUnlockedFor !== ownStaff.id) {
+      const pinInfo = await staffStore.getPinInfo(ownStaff.id);
+      return res.status(403).json({
+        error: pinInfo?.pinHash ? 'Enter your 4-digit code to view commissions.' : 'Set a 4-digit code to view commissions.',
+        code: pinInfo?.pinHash ? 'PIN_REQUIRED' : 'PIN_NOT_SET',
+      });
+    }
+
+    // Fetch all companies with their app-owned rep assignment and revenue
+    const companies = await fetchAllCompanies(client);
+
+    // Build commission data by staff
+    const commissionsMap = {};
+
+    for (const company of companies) {
+      const assigned = company.assignedStaff;
+      if (!assigned?.staffId) continue;
+      if (!isUserManager && assigned.staffId !== ownStaff.id) continue;
+
+      const staffRecord = await staffStore.findById(assigned.staffId);
+      if (!staffRecord) continue;
+
+      if (!commissionsMap[staffRecord.id]) {
+        commissionsMap[staffRecord.id] = {
+          staffId: staffRecord.id,
+          name: staffRecord.name,
+          email: staffRecord.email,
+          commissionTier: staffRecord.commissionTier,
+          companies: [],
+          totalRevenue: 0,
+          totalCommission: 0
+        };
+      }
+
+      // Commission is earned only on orders placed since this rep took over the
+      // account (see fetchCompanyRevenueSince) — not the company's lifetime spend.
+      const revenueSince = await fetchCompanyRevenueSince(client, company.id, assigned.assignedAt);
+      const revenue = revenueSince.totalSpend;
+      const commission = (revenue * staffRecord.commissionTier) / 100;
+
+      commissionsMap[staffRecord.id].companies.push({
+        companyId: company.id,
+        companyName: company.name,
+        revenue,
+        commission,
+        assignedAt: assigned.assignedAt || null,
+        lastOrderDate: company.performance?.lastOrderDate
+      });
+
+      commissionsMap[staffRecord.id].totalRevenue += revenue;
+      commissionsMap[staffRecord.id].totalCommission += commission;
+    }
+
+    // Non-managers with no linked staff record see nothing (handled by the
+    // per-company skip above never populating commissionsMap for them).
+    const commissions = Object.values(commissionsMap);
+
+    // Sort by total commission descending
+    commissions.sort((a, b) => b.totalCommission - a.totalCommission);
+
+    res.json({
+      commissions,
+      isManager: isUserManager,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/commissions', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get single rep's commission details (with privacy check)
+app.get('/api/commissions/:staffId', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    const isUserManager = await isManager(user);
+    const { staffId } = req.params;
+
+    // Commissions show real pay figures, so every viewer — manager included
+    // — must have verified their own 4-digit code this session before this
+    // endpoint returns anything, on top of the existing privacy check below.
+    const ownStaff = user?.shopifyUserId ? await staffStore.findByShopifyUserId(user.shopifyUserId) : null;
+    if (!ownStaff) {
+      return res.status(403).json({ error: 'Ask a manager to add you as staff before viewing commissions.' });
+    }
+    if (req.session?.commissionsUnlockedFor !== ownStaff.id) {
+      const pinInfo = await staffStore.getPinInfo(ownStaff.id);
+      return res.status(403).json({
+        error: pinInfo?.pinHash ? 'Enter your 4-digit code to view commissions.' : 'Set a 4-digit code to view commissions.',
+        code: pinInfo?.pinHash ? 'PIN_REQUIRED' : 'PIN_NOT_SET',
+      });
+    }
+
+    // Privacy check: reps can only see their own, managers can see all
+    if (!isUserManager && ownStaff.id !== staffId) {
+      return res.status(403).json({ error: 'You can only view your own commissions' });
+    }
+
+    const staffRecord = await staffStore.findById(staffId);
+    if (!staffRecord) {
+      return res.status(404).json({ error: 'Staff member not found' });
+    }
+
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const companies = await fetchAllCompanies(client);
+    const repCommissions = {
+      staffId: staffRecord.id,
+      name: staffRecord.name,
+      email: staffRecord.email,
+      commissionTier: staffRecord.commissionTier,
+      companies: [],
+      totalRevenue: 0,
+      totalCommission: 0
+    };
+
+    for (const company of companies) {
+      if (company.assignedStaff?.staffId !== staffId) continue;
+
+      const revenueSince = await fetchCompanyRevenueSince(client, company.id, company.assignedStaff.assignedAt);
+      const revenue = revenueSince.totalSpend;
+      const commission = (revenue * repCommissions.commissionTier) / 100;
+
+      repCommissions.companies.push({
+        companyId: company.id,
+        companyName: company.name,
+        revenue,
+        commission,
+        assignedAt: company.assignedStaff.assignedAt || null,
+        lastOrderDate: company.performance?.lastOrderDate,
+        daysSinceLastOrder: company.performance?.daysSinceLastOrder
+      });
+
+      repCommissions.totalRevenue += revenue;
+      repCommissions.totalCommission += commission;
+    }
+
+    if (repCommissions.companies.length === 0) {
+      return res.status(404).json({ error: 'No commissions found for this staff member' });
+    }
+
+    res.json({ commissions: repCommissions });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/commissions/:staffId', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -519,6 +1762,11 @@ app.get('/api/locations', validateAuthenticatedSession, async (req, res) => {
       pageInfo: { hasNextPage: false }
     });
   } catch (error) {
+    const message = formatShopifyClientError(error);
+    if (/ACCESS_DENIED|Access denied for metaobjects|UndefinedObject/i.test(message)) {
+      console.warn('GET /api/locations:', message);
+      return res.json({ edges: [], pageInfo: { hasNextPage: false }, warning: message });
+    }
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
       return sendShopifyApiError(res, error);
     }
@@ -543,212 +1791,6 @@ app.post('/api/sync-b2b-map', validateAuthenticatedSession, async (req, res) => 
   } catch (err) {
     console.error('B2B Map Sync error:', err);
     res.status(500).json({ error: err.message });
-  }
-});
-
-function sendAppUserError(res, err) {
-  if (isMissingDefinition(err)) {
-    return res.status(409).json({
-      error: 'Leadership accounts are not set up on this shop yet. Run shopify app deploy, then open Staff to create the first admin account.',
-      code: 'APP_USER_DEFINITION_MISSING',
-    });
-  }
-  const status = err.status || 500;
-  return res.status(status).json({ error: err.message });
-}
-
-function withoutPinHash(user) {
-  return {
-    id: user.id,
-    handle: user.handle,
-    name: user.name,
-    isAdmin: user.isAdmin,
-  };
-}
-
-app.get('/api/app-users', validateAuthenticatedSession, async (req, res) => {
-  try {
-    const client = await getGraphqlClient(req, res);
-    if (!client) return res.status(401).json({ error: 'Unauthorized' });
-    const users = await listAppUsers(client);
-    res.json({ users: users.map(withoutPinHash) });
-  } catch (error) {
-    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
-      return sendShopifyApiError(res, error);
-    }
-    console.error('GET /api/app-users', error);
-    return sendAppUserError(res, error);
-  }
-});
-
-app.get('/api/admin/me', validateAuthenticatedSession, (req, res) => {
-  const user = publicSession(req);
-  if (!user) return res.status(401).json({ error: 'PIN sign-in required', code: 'ADMIN_PIN_REQUIRED' });
-  res.json({ user });
-});
-
-app.post('/api/admin/logout', validateAuthenticatedSession, (req, res) => {
-  req.session.appUser = null;
-  res.json({ ok: true });
-});
-
-app.post('/api/admin/setup', validateAuthenticatedSession, async (req, res) => {
-  try {
-    const client = await getGraphqlClient(req, res);
-    if (!client) return res.status(401).json({ error: 'Unauthorized' });
-    const users = await listAppUsers(client);
-    if (users.length > 0) {
-      return res.status(409).json({ error: 'An admin account already exists. Sign in with PIN.' });
-    }
-    const name = String(req.body?.name || 'Admin').trim() || 'Admin';
-    const created = await upsertAppUser(client, {
-      handle: toHandle(name),
-      name,
-      pin: req.body?.pin,
-      isAdmin: true,
-    });
-    const user = { id: created.id, handle: created.handle, name, isAdmin: true };
-    setAppUserSession(req, user);
-    clearPinGuard(req);
-    res.json({ user });
-  } catch (error) {
-    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
-      return sendShopifyApiError(res, error);
-    }
-    console.error('POST /api/admin/setup', error);
-    return sendAppUserError(res, error);
-  }
-});
-
-app.post('/api/admin/login', validateAuthenticatedSession, async (req, res) => {
-  try {
-    assertNotLocked(req);
-    const client = await getGraphqlClient(req, res);
-    if (!client) return res.status(401).json({ error: 'Unauthorized' });
-    const users = await listAppUsers(client);
-    const user = users.find((u) => u.id === req.body?.userId);
-    if (!user || !verifyPin(req.body?.pin, user.pinHash)) {
-      recordPinFailure(req);
-      return res.status(401).json({ error: 'Account or PIN is incorrect' });
-    }
-    clearPinGuard(req);
-    const publicUser = withoutPinHash(user);
-    setAppUserSession(req, publicUser);
-    res.json({ user: publicUser });
-  } catch (error) {
-    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
-      return sendShopifyApiError(res, error);
-    }
-    console.error('POST /api/admin/login', error);
-    return sendAppUserError(res, error);
-  }
-});
-
-app.get('/api/admin/users', validateAuthenticatedSession, requireAdmin, async (req, res) => {
-  try {
-    const client = await getGraphqlClient(req, res);
-    if (!client) return res.status(401).json({ error: 'Unauthorized' });
-    const users = await listAppUsers(client);
-    res.json({ users: users.map(withoutPinHash) });
-  } catch (error) {
-    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
-      return sendShopifyApiError(res, error);
-    }
-    console.error('GET /api/admin/users', error);
-    return sendAppUserError(res, error);
-  }
-});
-
-app.post('/api/admin/users', validateAuthenticatedSession, requireAdmin, async (req, res) => {
-  try {
-    const client = await getGraphqlClient(req, res);
-    if (!client) return res.status(401).json({ error: 'Unauthorized' });
-    const name = String(req.body?.name || '').trim();
-    if (!name) return res.status(400).json({ error: 'Name is required' });
-    const created = await upsertAppUser(client, {
-      handle: toHandle(name),
-      name,
-      pin: req.body?.pin,
-      isAdmin: Boolean(req.body?.isAdmin),
-    });
-    res.json({ user: { id: created.id, handle: created.handle, name, isAdmin: Boolean(req.body?.isAdmin) } });
-  } catch (error) {
-    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
-      return sendShopifyApiError(res, error);
-    }
-    console.error('POST /api/admin/users', error);
-    return sendAppUserError(res, error);
-  }
-});
-
-app.patch('/api/admin/users/:handle', validateAuthenticatedSession, requireAdmin, async (req, res) => {
-  try {
-    const client = await getGraphqlClient(req, res);
-    if (!client) return res.status(401).json({ error: 'Unauthorized' });
-    const users = await listAppUsers(client);
-    const user = users.find((u) => u.handle === req.params.handle);
-    if (!user) return res.status(404).json({ error: 'Account not found' });
-    const nextAdmin = req.body?.isAdmin == null ? user.isAdmin : Boolean(req.body.isAdmin);
-    if (user.isAdmin && !nextAdmin && users.filter((u) => u.isAdmin).length <= 1) {
-      return res.status(400).json({ error: 'Keep at least one admin account' });
-    }
-    const name = String(req.body?.name || user.name).trim() || user.name;
-    await upsertAppUser(client, {
-      handle: user.handle,
-      name,
-      pin: req.body?.pin || null,
-      pinHash: req.body?.pin ? undefined : user.pinHash,
-      isAdmin: nextAdmin,
-    });
-    if (req.session.appUser?.id === user.id) {
-      setAppUserSession(req, { ...withoutPinHash(user), name, isAdmin: nextAdmin });
-    }
-    res.json({ user: { id: user.id, handle: user.handle, name, isAdmin: nextAdmin } });
-  } catch (error) {
-    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
-      return sendShopifyApiError(res, error);
-    }
-    console.error('PATCH /api/admin/users/:handle', error);
-    return sendAppUserError(res, error);
-  }
-});
-
-app.delete('/api/admin/users/:handle', validateAuthenticatedSession, requireAdmin, async (req, res) => {
-  try {
-    const client = await getGraphqlClient(req, res);
-    if (!client) return res.status(401).json({ error: 'Unauthorized' });
-    const users = await listAppUsers(client);
-    const user = users.find((u) => u.handle === req.params.handle);
-    if (!user) return res.status(404).json({ error: 'Account not found' });
-    if (user.isAdmin && users.filter((u) => u.isAdmin).length <= 1) {
-      return res.status(400).json({ error: 'Keep at least one admin account' });
-    }
-    await deleteAppUser(client, user.id);
-    if (req.session.appUser?.id === user.id) {
-      req.session.appUser = null;
-    }
-    res.json({ ok: true });
-  } catch (error) {
-    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
-      return sendShopifyApiError(res, error);
-    }
-    console.error('DELETE /api/admin/users/:handle', error);
-    return sendAppUserError(res, error);
-  }
-});
-
-app.get('/api/reports/summary', validateAuthenticatedSession, requireAppUser, async (req, res) => {
-  try {
-    const client = await getGraphqlClient(req, res);
-    if (!client) return res.status(401).json({ error: 'Unauthorized' });
-    const summary = await buildReportSummary(client);
-    res.json(summary);
-  } catch (error) {
-    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
-      return sendShopifyApiError(res, error);
-    }
-    console.error('GET /api/reports/summary', error);
-    res.status(500).json({ error: error.message });
   }
 });
 

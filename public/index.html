@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-    <title>B2B Map Sync Dashboard</title>
+    <title>B2B Dashboard</title>
     <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
     <script src="https://cdn.shopify.com/shopifycloud/polaris.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
@@ -14,7 +14,6 @@
         body { font-family: 'Inter', sans-serif; background-color: #f6faff; }
         .loading-overlay { display: none; }
         .loading-overlay.active { display: flex; }
-        /* Keep X/Y on one transform — Tailwind -translate-x-1/2 was overriding hide and leaving the red bar visible */
         .toast {
             transform: translate(-50%, calc(100% + 1.5rem));
             opacity: 0;
@@ -27,12 +26,17 @@
             pointer-events: auto;
         }
         #map { width: 100%; height: 100%; min-height: 400px; border-radius: 0.5rem; }
+        .badge-green { background-color: #dcfce7; color: #166534; }
+        .badge-amber { background-color: #fef3c7; color: #92400e; }
+        .badge-red { background-color: #fee2e2; color: #991b1b; }
+        .tab-active { border-b-2 border-[#008060] color: #008060; }
+        .notes-drawer { transform: translateX(100%); transition: transform 0.3s ease; }
+        .notes-drawer.active { transform: translateX(0); }
     </style>
 </head>
 <body class="text-zinc-900 bg-[#f6faff]">
 <s-app-nav>
     <s-link href="/reports">Reports</s-link>
-    <s-link href="/staff">Staff</s-link>
 </s-app-nav>
 
 <!-- Top Navigation -->
@@ -40,12 +44,24 @@
     <div class="flex items-center gap-4">
         <div class="flex items-center gap-2">
             <div class="w-8 h-8 rounded-lg bg-[#008060] flex items-center justify-center">
-                <span class="material-symbols-outlined text-white text-sm">map</span>
+                <span class="material-symbols-outlined text-white text-sm">dashboard</span>
             </div>
-            <span class="font-bold text-lg hidden sm:block">B2B Map Sync</span>
+            <span class="font-bold text-lg hidden sm:block">B2B Dashboard</span>
         </div>
     </div>
     <div class="flex items-center gap-3">
+        <button id="claim-admin-btn" onclick="claimAdmin()" style="display:none;" class="bg-amber-500 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-amber-600 active:scale-[0.98] transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">shield_person</span>
+            Claim Admin
+        </button>
+        <button id="claim-staff-btn" onclick="openClaimStaffModal()" style="display:none;" class="bg-amber-500 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-amber-600 active:scale-[0.98] transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">person_add</span>
+            Link My Account
+        </button>
+        <a id="reports-link" href="#" style="display:none;" class="bg-white border border-zinc-200 text-zinc-700 px-4 py-2 rounded-md text-sm font-medium hover:bg-zinc-50 active:scale-[0.98] transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">summarize</span>
+            Reports
+        </a>
         <button id="sync-btn" onclick="syncMap()" class="bg-[#008060] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[#00654b] active:scale-[0.98] transition-all flex items-center gap-2">
             <span class="material-symbols-outlined text-sm">sync</span>
             Run Map Sync
@@ -53,7 +69,29 @@
     </div>
 </nav>
 
-<!-- Status Toast (hidden until showToast) -->
+<!-- Tabs -->
+<div class="border-b border-zinc-200 bg-white sticky top-16 z-30">
+    <div class="flex px-4 md:px-6 overflow-x-auto">
+        <button id="tab-customers" onclick="switchTab('customers')" class="px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 border-transparent hover:border-zinc-300 transition-colors tab-active whitespace-nowrap">
+            <span class="material-symbols-outlined text-sm">people</span>
+            Customers
+        </button>
+        <button id="tab-commissions" onclick="switchTab('commissions')" class="px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 border-transparent hover:border-zinc-300 transition-colors whitespace-nowrap">
+            <span class="material-symbols-outlined text-sm">paid</span>
+            Commissions
+        </button>
+        <button id="tab-staff" onclick="switchTab('staff')" class="px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 border-transparent hover:border-zinc-300 transition-colors manager-only whitespace-nowrap" style="display:none;">
+            <span class="material-symbols-outlined text-sm">manage_accounts</span>
+            Staff Management
+        </button>
+        <button id="tab-map" onclick="switchTab('map')" class="px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 border-transparent hover:border-zinc-300 transition-colors whitespace-nowrap">
+            <span class="material-symbols-outlined text-sm">map</span>
+            Map
+        </button>
+    </div>
+</div>
+
+<!-- Status Toast -->
 <div id="status-toast" class="toast fixed bottom-20 md:bottom-6 left-1/2 bg-red-600 text-white px-6 py-3 rounded-lg shadow-xl z-50 flex items-center gap-2 max-w-[90vw] md:max-w-md w-full" role="status" aria-live="polite">
     <span class="material-symbols-outlined" data-toast-icon>error</span>
     <p class="text-sm font-medium flex-1" data-toast-message></p>
@@ -62,56 +100,97 @@
 <!-- Loading Overlay -->
 <div id="loading-overlay" class="loading-overlay fixed inset-0 bg-white/80 backdrop-blur-sm z-50 items-center justify-center flex-col gap-4">
     <div class="w-12 h-12 border-4 border-[#008060]/20 border-t-[#008060] rounded-full animate-spin"></div>
-    <p class="text-[#008060] font-medium animate-pulse">Loading B2B locations...</p>
+    <p class="text-[#008060] font-medium animate-pulse">Loading...</p>
 </div>
 
-<div class="flex h-[calc(100vh-64px)] overflow-hidden">
-    <!-- Main Content Area -->
-    <main class="flex-1 overflow-y-auto w-full md:pb-0 pb-16">
-        <div class="p-4 md:p-6 lg:p-8 max-w-[1600px] mx-auto space-y-6">
-
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                <!-- Stats Cards -->
-                <div class="bg-white rounded-xl p-5 border border-zinc-200 shadow-sm">
-                    <div class="flex justify-between items-start mb-2">
-                        <p class="text-sm font-medium text-zinc-500">Total B2B Locations</p>
-                        <div class="p-2 bg-blue-50 rounded-lg"><span class="material-symbols-outlined text-blue-600 text-[20px]">pin_drop</span></div>
-                    </div>
-                    <h3 class="text-2xl font-bold text-zinc-900" id="locations-stat">-</h3>
+<div class="flex h-[calc(100vh-120px)] overflow-hidden">
+    <!-- Customers Tab -->
+    <div id="customers-view" class="flex-1 flex flex-col overflow-hidden w-full">
+        <!-- Filters & Search -->
+        <div class="border-b border-zinc-200 bg-white p-4 md:p-6 flex-shrink-0">
+            <div class="max-w-[1600px] mx-auto space-y-4">
+                <div class="relative">
+                    <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 text-sm">search</span>
+                    <input id="company-search" type="text" placeholder="Search by company name..." class="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none transition-all" onkeyup="onCompanySearchInput()"/>
                 </div>
-                <div class="bg-white rounded-xl p-5 border border-zinc-200 shadow-sm">
-                    <div class="flex justify-between items-start mb-2">
-                        <p class="text-sm font-medium text-zinc-500">Synced to Map</p>
-                        <div class="p-2 bg-green-50 rounded-lg"><span class="material-symbols-outlined text-green-600 text-[20px]">check_circle</span></div>
-                    </div>
-                    <h3 class="text-2xl font-bold text-zinc-900" id="synced-stat">-</h3>
-                </div>
-                <div class="bg-white rounded-xl p-5 border border-zinc-200 shadow-sm">
-                    <div class="flex justify-between items-start mb-2">
-                        <p class="text-sm font-medium text-zinc-500">Missing Coordinates</p>
-                        <div class="p-2 bg-red-50 rounded-lg"><span class="material-symbols-outlined text-red-600 text-[20px]">warning</span></div>
-                    </div>
-                    <h3 class="text-2xl font-bold text-zinc-900" id="missing-stat">-</h3>
+                <div class="flex flex-wrap items-center gap-2">
+                    <button onclick="setFilter('all')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-[#008060] text-white" data-filter="all">All Companies</button>
+                    <button onclick="setFilter('30')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="30">Last 30 Days</button>
+                    <button onclick="setFilter('89')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="89">31-89 Days</button>
+                    <button onclick="setFilter('90')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="90">90+ Days</button>
+                    <button onclick="setFilter('never')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="never">Never Ordered</button>
+                    <button onclick="setFilter('new')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="new">New Partners</button>
+                    <span class="text-xs text-zinc-400 ml-2 hidden sm:inline">Sort</span>
+                    <button type="button" onclick="setSort('stale')" class="sort-btn px-3 py-1 rounded-md text-sm font-medium bg-[#008060] text-white" data-sort="stale">Longest since order</button>
+                    <button type="button" onclick="setSort('recent')" class="sort-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-sort="recent">Most recent order</button>
                 </div>
             </div>
+        </div>
 
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Companies List -->
+        <div class="flex-1 flex flex-col overflow-hidden">
+            <div class="flex-1 overflow-y-auto">
+                <div class="max-w-[1600px] mx-auto w-full">
+                    <div class="divide-y divide-zinc-200" id="companies-list">
+                        <!-- Companies populated by JS -->
+                    </div>
+                </div>
+            </div>
+            <div id="companies-pagination" class="flex-shrink-0 border-t border-zinc-200 bg-white"></div>
+        </div>
+    </div>
+
+    <!-- Map Tab -->
+    <div id="map-view" class="hidden flex-1 flex flex-col overflow-hidden w-full">
+        <!-- Stats Cards -->
+        <div class="border-b border-zinc-200 bg-white p-4 md:p-6 flex-shrink-0">
+            <div class="max-w-[1600px] mx-auto">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-white rounded-xl p-5 border border-zinc-200 shadow-sm">
+                        <div class="flex justify-between items-start mb-2">
+                            <p class="text-sm font-medium text-zinc-500">Total B2B Locations</p>
+                            <div class="p-2 bg-blue-50 rounded-lg"><span class="material-symbols-outlined text-blue-600 text-[20px]">pin_drop</span></div>
+                        </div>
+                        <h3 class="text-2xl font-bold text-zinc-900" id="locations-stat">-</h3>
+                    </div>
+                    <div class="bg-white rounded-xl p-5 border border-zinc-200 shadow-sm">
+                        <div class="flex justify-between items-start mb-2">
+                            <p class="text-sm font-medium text-zinc-500">Synced to Map</p>
+                            <div class="p-2 bg-green-50 rounded-lg"><span class="material-symbols-outlined text-green-600 text-[20px]">check_circle</span></div>
+                        </div>
+                        <h3 class="text-2xl font-bold text-zinc-900" id="synced-stat">-</h3>
+                    </div>
+                    <div class="bg-white rounded-xl p-5 border border-zinc-200 shadow-sm">
+                        <div class="flex justify-between items-start mb-2">
+                            <p class="text-sm font-medium text-zinc-500">Missing Coordinates</p>
+                            <div class="p-2 bg-red-50 rounded-lg"><span class="material-symbols-outlined text-red-600 text-[20px]">warning</span></div>
+                        </div>
+                        <h3 class="text-2xl font-bold text-zinc-900" id="missing-stat">-</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Map Layout -->
+        <div class="flex-1 overflow-hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full p-4 md:p-6 max-w-[1600px] mx-auto w-full">
                 <!-- Locations List -->
-                <div class="bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden flex flex-col h-[600px]">
+                <div class="bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden flex flex-col">
                     <div class="p-5 border-b border-zinc-100 flex-shrink-0">
                         <h2 class="text-lg font-bold">Location Directory</h2>
                         <div class="relative mt-3">
                             <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 text-sm">search</span>
-                            <input id="location-search" type="text" placeholder="Search by name or city..." class="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none transition-all" onkeyup="renderLocations()"/>
+                            <input id="location-search" type="text" placeholder="Search by name or city..." class="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none transition-all" onkeyup="onLocationSearchInput()"/>
                         </div>
                     </div>
                     <div class="flex-1 overflow-y-auto p-2" id="locations-list">
                         <!-- Locations populated by JS -->
                     </div>
+                    <div id="locations-pagination" class="flex-shrink-0 border-t border-zinc-100"></div>
                 </div>
 
                 <!-- Map View -->
-                <div class="lg:col-span-2 bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden h-[600px] flex flex-col">
+                <div class="lg:col-span-2 bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden flex flex-col">
                     <div class="p-5 border-b border-zinc-100 flex-shrink-0 flex justify-between items-center">
                         <h2 class="text-lg font-bold">Geographic Distribution</h2>
                         <span class="text-sm text-zinc-500">Powered by Mapbox</span>
@@ -126,17 +205,246 @@
                 </div>
             </div>
         </div>
-    </main>
+    </div>
+
+    <!-- Commissions Tab -->
+    <div id="commissions-view" class="hidden flex-1 flex flex-col overflow-hidden w-full">
+        <div class="border-b border-zinc-200 bg-white p-4 md:p-6 flex-shrink-0">
+            <div class="max-w-[1600px] mx-auto">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-bold">Commission Summary</h2>
+                    <button onclick="openChangePinModal()" class="text-xs text-zinc-500 underline hover:text-zinc-700">Change my code</button>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-gradient-to-br from-emerald-50 to-green-50 rounded-xl p-5 border border-emerald-200">
+                        <p class="text-sm font-medium text-emerald-600 mb-2">My Total Commission</p>
+                        <h3 class="text-3xl font-bold text-emerald-900" id="my-commission">$0.00</h3>
+                        <p class="text-xs text-emerald-600 mt-2" id="commission-period">Current Month</p>
+                    </div>
+                    <div class="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-5 border border-blue-200">
+                        <p class="text-sm font-medium text-blue-600 mb-2">My Total Revenue</p>
+                        <h3 class="text-3xl font-bold text-blue-900" id="my-revenue">$0.00</h3>
+                        <p class="text-xs text-blue-600 mt-2" id="commission-count">0 Companies</p>
+                    </div>
+                    <div class="bg-gradient-to-br from-violet-50 to-purple-50 rounded-xl p-5 border border-violet-200">
+                        <p class="text-sm font-medium text-violet-600 mb-2">Commission Rate</p>
+                        <h3 class="text-3xl font-bold text-violet-900" id="my-rate">0%</h3>
+                        <p class="text-xs text-violet-600 mt-2">Your Tier</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="flex-1 overflow-y-auto">
+            <div class="max-w-[1600px] mx-auto w-full p-4 md:p-6">
+                <div class="bg-white rounded-xl border border-zinc-200 overflow-hidden" id="commissions-table">
+                    <div class="divide-y divide-zinc-200" id="commissions-list">
+                        <!-- Commissions populated by JS -->
+                    </div>
+                    <div id="commissions-pagination" class="border-t border-zinc-100"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Staff Management Tab (Managers Only) -->
+    <div id="staff-view" class="hidden flex-1 flex flex-col overflow-hidden w-full">
+        <div class="border-b border-zinc-200 bg-white p-4 md:p-6 flex-shrink-0">
+            <div class="max-w-[1600px] mx-auto">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-bold">Staff Management</h2>
+                    <button onclick="openAddStaffModal()" class="bg-[#008060] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[#00654b] flex items-center gap-2">
+                        <span class="material-symbols-outlined text-sm">add</span>
+                        Add Staff
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div class="flex-1 overflow-y-auto">
+            <div class="max-w-[1600px] mx-auto w-full p-4 md:p-6">
+                <div class="bg-white rounded-xl border border-zinc-200 overflow-hidden">
+                    <div class="divide-y divide-zinc-200" id="staff-list">
+                        <!-- Staff populated by JS -->
+                    </div>
+                    <div id="staff-pagination" class="border-t border-zinc-100"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add/Edit Staff Modal -->
+    <div id="staff-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg max-w-md w-full p-6 shadow-xl">
+            <h3 class="text-lg font-bold mb-4">Add Staff Member</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-zinc-700 mb-1">Name</label>
+                    <input id="staff-name" type="text" placeholder="John Smith" class="w-full px-3 py-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] outline-none"/>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-zinc-700 mb-1">Email</label>
+                    <input id="staff-email" type="email" placeholder="john@company.com" class="w-full px-3 py-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] outline-none"/>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-zinc-700 mb-1">Commission Tier (%)</label>
+                    <input id="staff-tier" type="number" min="0" max="100" placeholder="5" class="w-full px-3 py-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] outline-none"/>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-zinc-700 mb-1">Role</label>
+                    <select id="staff-role" class="w-full px-3 py-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] outline-none">
+                        <option value="rep">Sales Rep</option>
+                        <option value="manager">Manager</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-zinc-700 mb-1">Starter Commissions Code (optional)</label>
+                    <input id="staff-pin" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="e.g. 4821" class="w-full px-3 py-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] outline-none"/>
+                    <p class="text-xs text-zinc-500 mt-1">4-digit code they'll use to unlock the Commissions tab. Tell it to them directly — they can change it to their own once they're in. Leave blank to let them set their own from scratch.</p>
+                </div>
+            </div>
+            <div class="flex gap-2 mt-6">
+                <button onclick="closeAddStaffModal()" class="flex-1 px-4 py-2 border border-zinc-200 rounded-md text-sm font-medium hover:bg-zinc-50">Cancel</button>
+                <button onclick="saveStaff()" class="flex-1 px-4 py-2 bg-[#008060] text-white rounded-md text-sm font-medium hover:bg-[#00654b]">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Link My Account Modal (Reps) -->
+    <div id="claim-staff-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg max-w-md w-full p-6 shadow-xl">
+            <h3 class="text-lg font-bold mb-2">Which staff record is you?</h3>
+            <p class="text-sm text-zinc-500 mb-4">A manager already added your name in Staff Management. Pick it below to link it to this Shopify login.</p>
+            <div id="claim-staff-list" class="space-y-2 max-h-64 overflow-y-auto">
+                <!-- Populated by JS -->
+            </div>
+            <div class="flex gap-2 mt-6">
+                <button onclick="closeClaimStaffModal()" class="flex-1 px-4 py-2 border border-zinc-200 rounded-md text-sm font-medium hover:bg-zinc-50">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Commissions PIN Gate (set on first use, entered on later visits) -->
+    <div id="pin-gate-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg max-w-sm w-full p-6 shadow-xl">
+            <h3 class="text-lg font-bold mb-2" id="pin-gate-title">Enter your code</h3>
+            <p class="text-sm text-zinc-500 mb-4" id="pin-gate-subtitle">Commissions show real pay figures, so this tab is protected with your personal 4-digit code.</p>
+            <input id="pin-gate-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="••••" autocomplete="off" class="w-full text-center text-2xl tracking-[0.5em] px-3 py-2 border border-zinc-200 rounded-md focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none" onkeyup="if (event.key === 'Enter') submitPinGate()"/>
+            <p class="text-xs text-red-600 mt-2 hidden" id="pin-gate-error"></p>
+            <div class="flex gap-2 mt-6">
+                <button onclick="closePinGateModal()" class="flex-1 px-4 py-2 border border-zinc-200 rounded-md text-sm font-medium hover:bg-zinc-50">Cancel</button>
+                <button onclick="submitPinGate()" class="flex-1 px-4 py-2 bg-[#008060] text-white rounded-md text-sm font-medium hover:bg-[#00654b]">Continue</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Change My Commissions Code -->
+    <div id="change-pin-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg max-w-sm w-full p-6 shadow-xl">
+            <h3 class="text-lg font-bold mb-2">Change my code</h3>
+            <p class="text-sm text-zinc-500 mb-4">Enter your current code and pick a new one. If a manager gave you a starter code, this is where you swap it for something of your own.</p>
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-xs font-medium text-zinc-700 mb-1">Current code</label>
+                    <input id="change-pin-current" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="••••" autocomplete="off" class="w-full text-center text-xl tracking-[0.4em] px-3 py-2 border border-zinc-200 rounded-md focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none"/>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-zinc-700 mb-1">New code</label>
+                    <input id="change-pin-new" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="••••" autocomplete="off" class="w-full text-center text-xl tracking-[0.4em] px-3 py-2 border border-zinc-200 rounded-md focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none" onkeyup="if (event.key === 'Enter') submitChangePin()"/>
+                </div>
+            </div>
+            <p class="text-xs text-red-600 mt-2 hidden" id="change-pin-error"></p>
+            <div class="flex gap-2 mt-6">
+                <button onclick="closeChangePinModal()" class="flex-1 px-4 py-2 border border-zinc-200 rounded-md text-sm font-medium hover:bg-zinc-50">Cancel</button>
+                <button onclick="submitChangePin()" class="flex-1 px-4 py-2 bg-[#008060] text-white rounded-md text-sm font-medium hover:bg-[#00654b]">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notes Drawer -->
+    <div id="notes-drawer" class="notes-drawer fixed right-0 top-0 h-full w-full md:w-96 bg-white shadow-xl z-40 flex flex-col border-l border-zinc-200">
+        <div class="p-4 border-b border-zinc-200 flex justify-between items-center flex-shrink-0">
+            <h3 class="font-bold text-lg" id="notes-company-name">Notes</h3>
+            <button onclick="closeNotes()" class="p-1 hover:bg-zinc-100 rounded-md">
+                <span class="material-symbols-outlined text-xl">close</span>
+            </button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 space-y-3" id="notes-list">
+            <!-- Notes populated by JS -->
+        </div>
+        <div class="p-4 border-t border-zinc-200 flex-shrink-0 space-y-2">
+            <textarea id="note-input" placeholder="Add a note..." class="w-full p-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none transition-all" rows="3"></textarea>
+            <button onclick="saveNote()" class="w-full bg-[#008060] text-white px-3 py-2 rounded-md text-sm font-medium hover:bg-[#00654b] active:scale-[0.98] transition-all">
+                Save Note
+            </button>
+        </div>
+    </div>
 </div>
 
 <script>window.shopifyApiFetch = window.fetch.bind(window);</script>
 <script type="module" src="/shopify-session-bootstrap.js"></script>
 <script>
+    let companies = [];
     let locations = [];
     let map;
     let markers = [];
+    let currentTab = 'customers';
+    let currentFilter = 'all';
+    let currentSort = 'stale';
+    let selectedCompanyId = null;
+    let toastHideTimer = null;
 
     const MAPBOX_TOKEN = document.querySelector('meta[name="mapbox-token"]')?.getAttribute('content') || '';
+
+    const PAGE_SIZES = [25, 50, 100, 250];
+    const paginationState = {
+        companies: { page: 1, pageSize: 50 },
+        locations: { page: 1, pageSize: 50 },
+        staff: { page: 1, pageSize: 50 },
+        commissions: { page: 1, pageSize: 50 },
+    };
+
+    // Slices `items` for the current page of `state`, clamping state.page into
+    // range first (so a page left dangling by a shrunk list/filter self-heals),
+    // and paints a Showing X-Y of Z / rows-per-page / prev-next bar into
+    // `containerId`. `pageChangeFn`/`pageSizeChangeFn` are the *names* of the
+    // global functions to wire into the controls' onclick/onchange.
+    function paginate(items, state, containerId, pageChangeFn, pageSizeChangeFn) {
+        const total = items.length;
+        const totalPages = Math.max(1, Math.ceil(total / state.pageSize));
+        if (state.page > totalPages) state.page = totalPages;
+        if (state.page < 1) state.page = 1;
+
+        const container = document.getElementById(containerId);
+        if (container) {
+            if (total === 0) {
+                container.innerHTML = '';
+            } else {
+                const start = (state.page - 1) * state.pageSize;
+                const startLabel = start + 1;
+                const endLabel = Math.min(start + state.pageSize, total);
+                container.innerHTML = `
+                    <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-xs text-zinc-500">
+                        <div>Showing ${startLabel}-${endLabel} of ${total}</div>
+                        <div class="flex items-center gap-3">
+                            <label class="flex items-center gap-1">
+                                Rows:
+                                <select onchange="${pageSizeChangeFn}(this.value)" class="border border-zinc-200 rounded px-1 py-0.5 text-xs">
+                                    ${PAGE_SIZES.map(s => `<option value="${s}" ${state.pageSize === s ? 'selected' : ''}>${s}</option>`).join('')}
+                                </select>
+                            </label>
+                            <div class="flex items-center gap-1">
+                                <button onclick="${pageChangeFn}(${state.page - 1})" ${state.page <= 1 ? 'disabled' : ''} class="px-2 py-1 border border-zinc-200 rounded disabled:opacity-40 disabled:cursor-not-allowed hover:bg-zinc-50">Prev</button>
+                                <span class="px-2">Page ${state.page} of ${totalPages}</span>
+                                <button onclick="${pageChangeFn}(${state.page + 1})" ${state.page >= totalPages ? 'disabled' : ''} class="px-2 py-1 border border-zinc-200 rounded disabled:opacity-40 disabled:cursor-not-allowed hover:bg-zinc-50">Next</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        const start = (state.page - 1) * state.pageSize;
+        return items.slice(start, start + state.pageSize);
+    }
 
     function apiUrl(path) {
         const params = new URLSearchParams(window.location.search);
@@ -149,11 +457,11 @@
         return qs ? `${path}?${qs}` : path;
     }
 
+    document.getElementById('reports-link').href = apiUrl('/reports');
+
     function setLoading(active) {
         document.getElementById('loading-overlay').classList.toggle('active', active);
     }
-
-    let toastHideTimer = null;
 
     function showToast(msg, type = 'error') {
         const toast = document.getElementById('status-toast');
@@ -171,27 +479,249 @@
         showToast(msg, 'error');
     }
 
+    function switchTab(tab) {
+        currentTab = tab;
+        document.getElementById('customers-view').classList.toggle('hidden', tab !== 'customers');
+        document.getElementById('commissions-view').classList.toggle('hidden', tab !== 'commissions');
+        document.getElementById('staff-view').classList.toggle('hidden', tab !== 'staff');
+        document.getElementById('map-view').classList.toggle('hidden', tab !== 'map');
+        document.getElementById('tab-customers').classList.toggle('tab-active', tab === 'customers');
+        document.getElementById('tab-commissions').classList.toggle('tab-active', tab === 'commissions');
+        document.getElementById('tab-staff').classList.toggle('tab-active', tab === 'staff');
+        document.getElementById('tab-map').classList.toggle('tab-active', tab === 'map');
+
+        if (tab === 'map' && !map) {
+            setTimeout(initMap, 100);
+        } else if (tab === 'commissions') {
+            checkCommissionsAccess();
+        } else if (tab === 'staff') {
+            loadStaff();
+        }
+    }
+
+    // Commissions show real pay figures, so this tab sits behind a personal
+    // 4-digit code on top of normal Shopify login — see /api/commissions/access.
+    let pinGateMode = null; // 'set' | 'verify'
+
+    async function checkCommissionsAccess() {
+        setLoading(true);
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/commissions/access'));
+            if (!res.ok) throw new Error(await readApiError(res, 'Failed to check access'));
+            const access = await res.json();
+            if (!access.hasStaffRecord) {
+                showError('Ask a manager to add you as staff before viewing commissions.');
+                return;
+            }
+            if (access.locked) {
+                showError('Too many incorrect attempts. Ask a manager to reset your code.');
+                return;
+            }
+            if (access.unlocked) {
+                loadCommissions();
+                return;
+            }
+            openPinGateModal(access.hasPin ? 'verify' : 'set');
+        } catch (e) {
+            showError(e.message);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    function openPinGateModal(mode) {
+        pinGateMode = mode;
+        document.getElementById('pin-gate-title').textContent = mode === 'set' ? 'Set your code' : 'Enter your code';
+        document.getElementById('pin-gate-subtitle').textContent = mode === 'set'
+            ? "Choose a 4-digit code. You'll enter this each time you open Commissions in a new session — if you forget it, ask a manager to reset it for you."
+            : 'Commissions show real pay figures, so this tab is protected with your personal 4-digit code.';
+        document.getElementById('pin-gate-input').value = '';
+        document.getElementById('pin-gate-error').classList.add('hidden');
+        document.getElementById('pin-gate-modal').classList.remove('hidden');
+        setTimeout(() => document.getElementById('pin-gate-input').focus(), 50);
+    }
+
+    function closePinGateModal() {
+        document.getElementById('pin-gate-modal').classList.add('hidden');
+        pinGateMode = null;
+    }
+
+    async function submitPinGate() {
+        const pin = document.getElementById('pin-gate-input').value.trim();
+        const errorEl = document.getElementById('pin-gate-error');
+        errorEl.classList.add('hidden');
+
+        if (!/^\d{4}$/.test(pin)) {
+            errorEl.textContent = 'Enter exactly 4 digits.';
+            errorEl.classList.remove('hidden');
+            return;
+        }
+
+        const endpoint = pinGateMode === 'set' ? '/api/commissions/pin/set' : '/api/commissions/pin/verify';
+        setLoading(true);
+        try {
+            const res = await window.shopifyApiFetch(apiUrl(endpoint), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                errorEl.textContent = data.error || 'Something went wrong.';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+            closePinGateModal();
+            loadCommissions();
+        } catch (e) {
+            errorEl.textContent = e.message;
+            errorEl.classList.remove('hidden');
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    function openChangePinModal() {
+        document.getElementById('change-pin-current').value = '';
+        document.getElementById('change-pin-new').value = '';
+        document.getElementById('change-pin-error').classList.add('hidden');
+        document.getElementById('change-pin-modal').classList.remove('hidden');
+    }
+
+    function closeChangePinModal() {
+        document.getElementById('change-pin-modal').classList.add('hidden');
+    }
+
+    async function submitChangePin() {
+        const currentPin = document.getElementById('change-pin-current').value.trim();
+        const newPin = document.getElementById('change-pin-new').value.trim();
+        const errorEl = document.getElementById('change-pin-error');
+        errorEl.classList.add('hidden');
+
+        if (!/^\d{4}$/.test(currentPin) || !/^\d{4}$/.test(newPin)) {
+            errorEl.textContent = 'Both codes must be exactly 4 digits.';
+            errorEl.classList.remove('hidden');
+            return;
+        }
+
+        setLoading(true);
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/commissions/pin/change'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ currentPin, newPin })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                errorEl.textContent = data.error || 'Something went wrong.';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+            closeChangePinModal();
+            showToast('Code updated', 'success');
+        } catch (e) {
+            errorEl.textContent = e.message;
+            errorEl.classList.remove('hidden');
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    function setFilter(filter) {
+        currentFilter = filter;
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            const isActive = btn.dataset.filter === filter;
+            btn.classList.toggle('bg-[#008060]', isActive);
+            btn.classList.toggle('text-white', isActive);
+            btn.classList.toggle('bg-zinc-200', !isActive);
+            btn.classList.toggle('text-zinc-900', !isActive);
+        });
+        paginationState.companies.page = 1;
+        renderCustomers();
+    }
+
+    function setSort(sort) {
+        currentSort = sort;
+        document.querySelectorAll('.sort-btn').forEach(btn => {
+            const isActive = btn.dataset.sort === sort;
+            btn.classList.toggle('bg-[#008060]', isActive);
+            btn.classList.toggle('text-white', isActive);
+            btn.classList.toggle('bg-zinc-200', !isActive);
+            btn.classList.toggle('text-zinc-900', !isActive);
+        });
+        paginationState.companies.page = 1;
+        renderCustomers();
+    }
+
+    function daysSinceSortValue(company) {
+        const days = company.performance?.daysSinceLastOrder;
+        return days == null ? Number.POSITIVE_INFINITY : days;
+    }
+
+    async function readApiError(res, fallback) {
+        try {
+            const data = await res.json();
+            return data?.error || fallback;
+        } catch {
+            return fallback;
+        }
+    }
+
+    function companyApiUrl(companyId, suffix = '') {
+        return apiUrl(`/api/companies/${encodeURIComponent(companyId)}${suffix}`);
+    }
+
+    function onCompanySearchInput() {
+        paginationState.companies.page = 1;
+        renderCustomers();
+    }
+
+    function goToCompanyPage(page) {
+        paginationState.companies.page = page;
+        renderCustomers();
+    }
+
+    function setCompanyPageSize(size) {
+        paginationState.companies.pageSize = parseInt(size, 10);
+        paginationState.companies.page = 1;
+        renderCustomers();
+    }
+
     async function loadData() {
         setLoading(true);
         try {
-            const res = await window.shopifyApiFetch(apiUrl('/api/locations'));
-            const data = await res.json();
-            
-            if (!res.ok) throw new Error(data.error || 'Failed to load locations');
+            const [companiesRes, locationsRes] = await Promise.all([
+                window.shopifyApiFetch(apiUrl('/api/companies')),
+                window.shopifyApiFetch(apiUrl('/api/locations'))
+            ]);
 
-            locations = (data.edges || []).map(e => {
-                const fields = {};
-                e.node.fields.forEach(f => fields[f.key] = f.value);
-                return {
-                    id: e.node.id,
-                    handle: e.node.handle,
-                    ...fields
-                };
-            });
+            if (!companiesRes.ok) {
+                throw new Error(await readApiError(companiesRes, 'Failed to load companies'));
+            }
 
+            const companiesData = await companiesRes.json();
+            companies = (companiesData.edges || []).map(e => e.node);
+
+            if (locationsRes.ok) {
+                const locationsData = await locationsRes.json();
+                locations = (locationsData.edges || []).map(e => {
+                    const fields = {};
+                    (e.node?.fields || []).forEach(f => { fields[f.key] = f.value; });
+                    return {
+                        id: e.node.id,
+                        handle: e.node.handle,
+                        ...fields
+                    };
+                });
+            } else {
+                locations = [];
+                const locError = await readApiError(locationsRes, 'Failed to load map locations');
+                console.warn(locError);
+            }
+
+            renderCustomers();
             renderSummary();
-            renderLocations();
-            initMap();
+            if (map) updateMarkers();
         } catch (e) {
             console.error(e);
             showError(e.message);
@@ -200,12 +730,632 @@
         }
     }
 
+    function companyHasOrdered(company) {
+        const perf = company.performance || {};
+        if (perf.hasOrdered === true) return true;
+        if ((perf.orderCount || 0) > 0) return true;
+        if ((perf.totalSpend || 0) > 0) return true;
+        return Boolean(perf.lastOrderDate);
+    }
+
+    function getDaysSinceBadgeClass(daysSince, hasOrdered) {
+        if (daysSince === null || daysSince === undefined) return hasOrdered ? 'badge-amber' : 'badge-red';
+        if (daysSince <= 30) return 'badge-green';
+        if (daysSince <= 89) return 'badge-amber';
+        return 'badge-red';
+    }
+
+    function getDaysSinceBadgeText(daysSince, hasOrdered) {
+        if (daysSince === null || daysSince === undefined) return hasOrdered ? 'Ordered' : 'Never';
+        if (daysSince === 0) return 'Today';
+        if (daysSince === 1) return 'Yesterday';
+        return `${daysSince} days`;
+    }
+
+    // A "new partner" is a business still ramping up (3 or fewer lifetime
+    // orders, including orders on linked buyer accounts) — worth flagging
+    // for extra follow-up attention.
+    const NEW_PARTNER_MAX_ORDERS = 3;
+    function isNewPartner(company) {
+        const orderCount = company.performance?.orderCount;
+        if (orderCount === undefined || orderCount === null) return false;
+        if (companyHasOrdered(company) && orderCount === 0) return false;
+        return orderCount <= NEW_PARTNER_MAX_ORDERS;
+    }
+
+    function shouldShowCompany(company) {
+        if (currentFilter === 'all') return true;
+        if (currentFilter === 'new') return isNewPartner(company);
+        const days = company.performance?.daysSinceLastOrder;
+        if (currentFilter === '30') return days !== null && days !== undefined && days <= 30;
+        if (currentFilter === '89') return days !== null && days !== undefined && days > 30 && days <= 89;
+        if (currentFilter === '90') return days !== null && days !== undefined && days > 89;
+        if (currentFilter === 'never') return !companyHasOrdered(company);
+        return true;
+    }
+
+    function renderAssignedRepCell(c) {
+        if (isManagerGlobal) {
+            return `<select onclick="event.stopPropagation()" onchange="event.stopPropagation(); assignRep('${c.id}', this.value)" class="border border-zinc-200 rounded px-1 py-0.5 text-xs">
+                        <option value="">Unassigned</option>
+                        ${staffList.map(s => `<option value="${s.id}" ${c.assignedStaff?.staffId === s.id ? 'selected' : ''}>${s.name}</option>`).join('')}
+                    </select>`;
+        }
+
+        const myStaffId = staffList[0]?.id || null;
+        if (!myStaffId) {
+            return `<span class="text-zinc-400 italic">Use "Link My Account" above, or ask a manager to add you as staff</span>`;
+        }
+
+        const assignedId = c.assignedStaff?.staffId;
+        if (!assignedId) {
+            return `<button onclick="event.stopPropagation(); assignRep('${c.id}', '${myStaffId}')" class="text-[#008060] underline text-xs font-medium">Claim this company</button>`;
+        }
+        if (assignedId === myStaffId) {
+            return `<span class="font-medium text-zinc-900">${c.assignedStaff.name} (you)</span>
+                    <button onclick="event.stopPropagation(); assignRep('${c.id}', '')" class="text-red-500 underline text-xs">Release</button>`;
+        }
+        return `<span class="font-medium text-zinc-900">${c.assignedStaff.name}</span>`;
+    }
+
+    function renderCustomers() {
+        const search = document.getElementById('company-search').value.toLowerCase();
+        const filtered = companies.filter(c => {
+            const matchesSearch = (c.name || '').toLowerCase().includes(search);
+            const matchesFilter = shouldShowCompany(c);
+            return matchesSearch && matchesFilter;
+        }).sort((a, b) => {
+            const da = daysSinceSortValue(a);
+            const db = daysSinceSortValue(b);
+            if (da !== db) return currentSort === 'stale' ? db - da : da - db;
+            return (a.name || '').localeCompare(b.name || '');
+        });
+
+        const pageItems = paginate(filtered, paginationState.companies, 'companies-pagination', 'goToCompanyPage', 'setCompanyPageSize');
+
+        const list = document.getElementById('companies-list');
+        list.innerHTML = pageItems.map(c => {
+            const perf = c.performance || {};
+            const daysSince = perf.daysSinceLastOrder;
+            const hasOrdered = companyHasOrdered(c);
+            const badgeClass = getDaysSinceBadgeClass(daysSince, hasOrdered);
+            const badgeText = getDaysSinceBadgeText(daysSince, hasOrdered);
+            const lastOrder = perf.lastOrderDate ? new Date(perf.lastOrderDate).toLocaleDateString() : '-';
+            const avgGap = perf.avgDaysBetweenOrders || '-';
+            const orderCount = perf.orderCount || 0;
+            const totalSpend = `$${(perf.totalSpend || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            const sinceRaw = c.customerSince || c.createdAt;
+            const customerSince = sinceRaw ? new Date(sinceRaw).toLocaleDateString() : '-';
+            const isNew = isNewPartner(c);
+            const notes = c.notes || [];
+            const assignedRepCell = renderAssignedRepCell(c);
+
+            return `
+                <div class="p-4 border-b border-zinc-100 last:border-0 hover:bg-zinc-50 transition-colors cursor-pointer" onclick="openNotes('${c.id}', '${c.name.replace(/'/g, "\\'")}')">
+                    <div class="flex justify-between items-start mb-2">
+                        <div class="flex-1">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <h4 class="font-semibold text-sm text-zinc-900">${c.name}</h4>
+                                ${isNew ? `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-700">NEW</span>` : ''}
+                            </div>
+                            ${c.externalId ? `<p class="text-xs text-zinc-500 mt-1">ID: ${c.externalId}</p>` : ''}
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="px-2 py-1 rounded text-xs font-medium ${badgeClass}">${badgeText}</span>
+                            ${notes.length > 0 ? `<span class="material-symbols-outlined text-sm text-[#008060]">note</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-5 gap-4 mt-3 text-xs">
+                        <div>
+                            <p class="text-zinc-500 mb-1">Customer Since</p>
+                            <p class="font-medium text-zinc-900">${customerSince}</p>
+                        </div>
+                        <div>
+                            <p class="text-zinc-500 mb-1">Total Spend</p>
+                            <p class="font-medium text-zinc-900">${totalSpend}</p>
+                            <p class="text-zinc-400">${orderCount} ${orderCount === 1 ? 'order' : 'orders'}</p>
+                        </div>
+                        <div>
+                            <p class="text-zinc-500 mb-1">Last Order</p>
+                            <p class="font-medium text-zinc-900">${lastOrder}</p>
+                        </div>
+                        <div>
+                            <p class="text-zinc-500 mb-1">Avg Gap</p>
+                            <p class="font-medium text-zinc-900">${avgGap}${avgGap !== '-' ? ' days' : ''}</p>
+                        </div>
+                        <div>
+                            <p class="text-zinc-500 mb-1">Notes</p>
+                            <p class="font-medium text-zinc-900">${notes.length}</p>
+                        </div>
+                    </div>
+                    <div class="mt-3 pt-3 border-t border-zinc-100 flex items-center justify-between gap-2 text-xs">
+                        <div class="flex items-center gap-2">
+                            <span class="text-zinc-500">Assigned Rep:</span>
+                            ${assignedRepCell}
+                        </div>
+                        <button onclick="event.stopPropagation(); viewCustomer('${c.id}')" class="text-[#008060] hover:text-[#00654b] underline font-medium flex items-center gap-1 flex-shrink-0">
+                            <span class="material-symbols-outlined text-sm">open_in_new</span>
+                            View Customer
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('') || '<div class="p-8 text-center text-zinc-500"><span class="material-symbols-outlined text-4xl mb-2 block">search_off</span><p>No companies found</p></div>';
+    }
+
+    // Deep-links to the company's page in Shopify admin. Using the bare shop
+    // domain (not a decoded `host`/admin.shopify.com URL) because Shopify
+    // transparently redirects {shop}/admin/... to the new admin regardless —
+    // it's the one form that works whether or not `host` is present/decodable.
+    function shopifyAdminCompanyUrl(companyGid) {
+        const shop = new URLSearchParams(window.location.search).get('shop');
+        const numericId = String(companyGid || '').split('/').pop();
+        if (!shop || !numericId) return null;
+        return `https://${shop}/admin/companies/${numericId}`;
+    }
+
+    function viewCustomer(companyId) {
+        const url = shopifyAdminCompanyUrl(companyId);
+        if (!url) {
+            showError('Could not determine the Shopify admin URL for this company.');
+            return;
+        }
+        window.open(url, '_blank', 'noopener,noreferrer');
+    }
+
+    async function openNotes(companyId, companyName) {
+        selectedCompanyId = companyId;
+        document.getElementById('notes-company-name').textContent = companyName;
+        document.getElementById('note-input').value = '';
+        document.getElementById('notes-drawer').classList.add('active');
+
+        try {
+            const res = await window.shopifyApiFetch(companyApiUrl(companyId, '/notes'));
+            if (!res.ok) throw new Error(await readApiError(res, 'Failed to load notes'));
+            const data = await res.json();
+            renderNotes(data.notes || []);
+        } catch (e) {
+            showError('Failed to load notes: ' + e.message);
+        }
+    }
+
+    async function assignRep(companyId, staffId) {
+        try {
+            const res = await window.shopifyApiFetch(companyApiUrl(companyId, '/assignment'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ staffId: staffId || null })
+            });
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(data?.error || 'Failed to update assignment');
+            showToast('Assignment updated', 'success');
+            await loadData();
+        } catch (e) {
+            showError(e.message);
+        }
+    }
+
+    function closeNotes() {
+        document.getElementById('notes-drawer').classList.remove('active');
+        selectedCompanyId = null;
+    }
+
+    function renderNotes(notes) {
+        const list = document.getElementById('notes-list');
+        list.innerHTML = notes.map(note => {
+            const date = new Date(note.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+            return `
+                <div class="p-3 bg-zinc-50 rounded-lg border border-zinc-200">
+                    <div class="flex justify-between items-start mb-1">
+                        <p class="text-xs font-medium text-zinc-500">${note.author}</p>
+                        <button onclick="deleteNote('${note.id}')" class="p-1 hover:bg-zinc-200 rounded text-zinc-400 hover:text-zinc-600 transition-colors">
+                            <span class="material-symbols-outlined text-sm">close</span>
+                        </button>
+                    </div>
+                    <p class="text-xs text-zinc-400 mb-2">${date}</p>
+                    <p class="text-sm text-zinc-700">${note.body}</p>
+                </div>
+            `;
+        }).join('') || '<p class="text-sm text-zinc-500 text-center py-4">No notes yet</p>';
+    }
+
+    async function saveNote() {
+        if (!selectedCompanyId) return;
+        const body = document.getElementById('note-input').value.trim();
+        if (!body) {
+            showError('Please enter a note');
+            return;
+        }
+
+        try {
+            const res = await window.shopifyApiFetch(companyApiUrl(selectedCompanyId, '/notes'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ body, author: 'Sales Team' })
+            });
+            if (!res.ok) throw new Error(await readApiError(res, 'Failed to save note'));
+
+            showToast('Note saved', 'success');
+            document.getElementById('note-input').value = '';
+
+            // Reload notes
+            const notesRes = await window.shopifyApiFetch(companyApiUrl(selectedCompanyId, '/notes'));
+            if (notesRes.ok) {
+                const data = await notesRes.json();
+                renderNotes(data.notes || []);
+                // Update company list to show note count
+                renderCustomers();
+            }
+        } catch (e) {
+            showError('Failed to save note: ' + e.message);
+        }
+    }
+
+    async function deleteNote(noteId) {
+        if (!selectedCompanyId) return;
+        if (!confirm('Delete this note?')) return;
+
+        try {
+            const res = await window.shopifyApiFetch(companyApiUrl(selectedCompanyId, `/notes/${encodeURIComponent(noteId)}`), {
+                method: 'DELETE'
+            });
+            if (!res.ok) throw new Error(await readApiError(res, 'Failed to delete note'));
+
+            showToast('Note deleted', 'success');
+
+            // Reload notes
+            const notesRes = await window.shopifyApiFetch(companyApiUrl(selectedCompanyId, '/notes'));
+            if (notesRes.ok) {
+                const data = await notesRes.json();
+                renderNotes(data.notes || []);
+                // Update company list to show note count
+                renderCustomers();
+            }
+        } catch (e) {
+            showError('Failed to delete note: ' + e.message);
+        }
+    }
+
+    let commissionData = null;
+    let staffList = [];
+    let currentUser = null;
+
+    async function loadCommissions() {
+        setLoading(true);
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/commissions'));
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                // Defense in depth: the server is the real gate (see
+                // /api/commissions), this just re-shows the right prompt if
+                // the unlock state changed since checkCommissionsAccess ran.
+                if (data.code === 'PIN_REQUIRED' || data.code === 'PIN_NOT_SET') {
+                    openPinGateModal(data.code === 'PIN_NOT_SET' ? 'set' : 'verify');
+                    return;
+                }
+                throw new Error(data.error || 'Failed to load commissions');
+            }
+            const data = await res.json();
+            commissionData = data;
+            renderCommissions();
+        } catch (e) {
+            showError('Failed to load commissions: ' + e.message);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    function renderCommissions() {
+        if (!commissionData) return;
+
+        const { isManager, commissions } = commissionData;
+
+        // Find current user's commission data for summary cards
+        let myData = null;
+        if (!isManager && commissions && commissions.length > 0) {
+            myData = commissions[0];
+        }
+
+        // Update summary cards
+        const myCommission = myData?.totalCommission || 0;
+        const myRevenue = myData?.totalRevenue || 0;
+        const myRate = myData?.commissionTier || 0;
+        const companyCount = myData?.companies?.length || 0;
+
+        document.getElementById('my-commission').textContent = `$${myCommission.toFixed(2)}`;
+        document.getElementById('my-revenue').textContent = `$${myRevenue.toFixed(2)}`;
+        document.getElementById('my-rate').textContent = `${myRate}%`;
+        document.getElementById('commission-count').textContent = `${companyCount} Companies`;
+
+        // Render commission list
+        const displayData = commissions || [];
+        const pageItems = paginate(displayData, paginationState.commissions, 'commissions-pagination', 'goToCommissionPage', 'setCommissionPageSize');
+
+        const list = document.getElementById('commissions-list');
+        list.innerHTML = pageItems.map(staff => {
+            const commission = staff?.totalCommission || 0;
+            const revenue = staff?.totalRevenue || 0;
+            const tier = staff?.commissionTier || 0;
+            const companyRows = staff?.companies || [];
+
+            // Payout is earned only from orders placed since each company was
+            // assigned to this rep, not the company's full order history — show
+            // the "since" date per company so the numbers are self-explanatory.
+            const companyBreakdown = companyRows.length > 0 ? `
+                <div class="mt-3 pt-3 border-t border-zinc-100 space-y-1.5">
+                    ${companyRows.map(c => `
+                        <div class="flex justify-between items-center text-xs">
+                            <span class="text-zinc-600">${c.companyName || 'Unknown company'}${c.assignedAt ? ` <span class="text-zinc-400">· since ${new Date(c.assignedAt).toLocaleDateString()}</span>` : ''}</span>
+                            <span class="font-medium text-zinc-900 flex-shrink-0 ml-2">$${(c.revenue || 0).toFixed(2)} <span class="text-emerald-600">(+$${(c.commission || 0).toFixed(2)})</span></span>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : '';
+
+            return `
+                <div class="p-4 border-b border-zinc-100 last:border-0 hover:bg-zinc-50 transition-colors">
+                    <div class="flex justify-between items-start mb-2">
+                        <div>
+                            <h4 class="font-semibold text-sm text-zinc-900">${staff?.name || 'Unknown'}</h4>
+                            <p class="text-xs text-zinc-500 mt-1">${staff?.email || ''}</p>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-2xl font-bold text-emerald-600">$${commission.toFixed(2)}</p>
+                            <p class="text-xs text-zinc-500 mt-1">${tier}% of $${revenue.toFixed(2)} earned since assignment</p>
+                        </div>
+                    </div>
+                    ${companyBreakdown}
+                </div>
+            `;
+        }).join('') || '<div class="p-8 text-center text-zinc-500"><p>No commission data available</p></div>';
+    }
+
+    function goToCommissionPage(page) {
+        paginationState.commissions.page = page;
+        renderCommissions();
+    }
+
+    function setCommissionPageSize(size) {
+        paginationState.commissions.pageSize = parseInt(size, 10);
+        paginationState.commissions.page = 1;
+        renderCommissions();
+    }
+
+    async function loadStaff(silent = false) {
+        if (!silent) setLoading(true);
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/staff'));
+            if (!res.ok) throw new Error('Failed to load staff');
+            const data = await res.json();
+            staffList = data.staff || [];
+            if (currentTab === 'staff') renderStaff();
+        } catch (e) {
+            if (!silent) showError('Failed to load staff: ' + e.message);
+        } finally {
+            if (!silent) setLoading(false);
+        }
+    }
+
+    function renderStaff() {
+        const pageItems = paginate(staffList, paginationState.staff, 'staff-pagination', 'goToStaffPage', 'setStaffPageSize');
+
+        const list = document.getElementById('staff-list');
+        list.innerHTML = pageItems.map(staff => {
+            const roleBadge = staff.role === 'manager' ? '<span class="px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-700">Manager</span>' : '<span class="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700">Sales Rep</span>';
+
+            return `
+                <div class="p-4 border-b border-zinc-100 last:border-0 hover:bg-zinc-50 transition-colors">
+                    <div class="flex justify-between items-start mb-2">
+                        <div class="flex-1">
+                            <h4 class="font-semibold text-sm text-zinc-900">${staff.name}</h4>
+                            <p class="text-xs text-zinc-500 mt-1">${staff.email}</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            ${roleBadge}
+                            <button onclick="deleteStaff('${staff.id}')" class="p-1 hover:bg-zinc-200 rounded text-zinc-400 hover:text-zinc-600 transition-colors">
+                                <span class="material-symbols-outlined text-sm">close</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-between gap-2 mt-2 text-xs">
+                        <span class="text-zinc-600">Commission Tier: <span class="font-semibold">${staff.commissionTier}%</span></span>
+                        <span class="flex items-center gap-2">
+                            <span class="text-zinc-400">${staff.hasPin ? 'Commissions code set' : 'No commissions code yet'}</span>
+                            ${staff.hasPin ? `<button onclick="resetStaffPin('${staff.id}', '${staff.name.replace(/'/g, "\\'")}')" class="text-[#008060] underline font-medium">Reset code</button>` : ''}
+                        </span>
+                    </div>
+                </div>
+            `;
+        }).join('') || '<div class="p-8 text-center text-zinc-500"><p>No staff members</p></div>';
+    }
+
+    async function resetStaffPin(staffId, name) {
+        if (!confirm(`Clear ${name}'s commissions code? They'll be prompted to set a new one next time they open Commissions.`)) return;
+        try {
+            const res = await window.shopifyApiFetch(apiUrl(`/api/staff/${staffId}/pin/reset`), { method: 'POST' });
+            if (!res.ok) throw new Error(await readApiError(res, 'Failed to reset code'));
+            showToast('Code reset', 'success');
+            await loadStaff();
+        } catch (e) {
+            showError('Failed to reset code: ' + e.message);
+        }
+    }
+
+    function goToStaffPage(page) {
+        paginationState.staff.page = page;
+        renderStaff();
+    }
+
+    function setStaffPageSize(size) {
+        paginationState.staff.pageSize = parseInt(size, 10);
+        paginationState.staff.page = 1;
+        renderStaff();
+    }
+
+    function openAddStaffModal() {
+        document.getElementById('staff-modal').classList.remove('hidden');
+        document.getElementById('staff-name').value = '';
+        document.getElementById('staff-email').value = '';
+        document.getElementById('staff-tier').value = '';
+        document.getElementById('staff-role').value = 'rep';
+        document.getElementById('staff-pin').value = '';
+    }
+
+    function closeAddStaffModal() {
+        document.getElementById('staff-modal').classList.add('hidden');
+    }
+
+    async function saveStaff() {
+        const name = document.getElementById('staff-name').value.trim();
+        const email = document.getElementById('staff-email').value.trim();
+        const tier = parseFloat(document.getElementById('staff-tier').value);
+        const role = document.getElementById('staff-role').value;
+        const pin = document.getElementById('staff-pin').value.trim();
+
+        if (!name || !email || isNaN(tier)) {
+            showError('Please fill in all fields');
+            return;
+        }
+
+        if (tier < 0 || tier > 100) {
+            showError('Commission tier must be between 0 and 100');
+            return;
+        }
+
+        if (pin && !/^\d{4}$/.test(pin)) {
+            showError('Starter code must be exactly 4 digits');
+            return;
+        }
+
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/staff'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, email, commissionTier: tier, role, pin: pin || undefined })
+            });
+            if (!res.ok) throw new Error(await readApiError(res, 'Failed to save staff'));
+
+            showToast('Staff member saved', 'success');
+            closeAddStaffModal();
+            await loadStaff();
+        } catch (e) {
+            showError('Failed to save staff: ' + e.message);
+        }
+    }
+
+    async function deleteStaff(staffId) {
+        if (!confirm('Delete this staff member?')) return;
+
+        try {
+            const res = await window.shopifyApiFetch(apiUrl(`/api/staff/${staffId}`), {
+                method: 'DELETE'
+            });
+            if (!res.ok) throw new Error('Failed to delete staff');
+
+            showToast('Staff member deleted', 'success');
+            await loadStaff();
+        } catch (e) {
+            showError('Failed to delete staff: ' + e.message);
+        }
+    }
+
+    let isManagerGlobal = false;
+    let hasAnyManagerGlobal = false;
+
+    function escapeHtml(str) {
+        return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+    }
+
+    // Reps only get to self-assign/see their own commissions once their login is
+    // linked to a staff record (see /api/staff/:staffId/claim) — until then hide
+    // the tab-specific "you" logic behind "Link My Account".
+    function updateClaimStaffVisibility() {
+        const show = !isManagerGlobal && hasAnyManagerGlobal && staffList.length === 0;
+        document.getElementById('claim-staff-btn').style.display = show ? '' : 'none';
+    }
+
+    async function checkUserRole() {
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/session-info'));
+            if (!res.ok) return;
+            const data = await res.json();
+            isManagerGlobal = !!data.isManager;
+            hasAnyManagerGlobal = !!data.hasAnyManager;
+            document.getElementById('tab-staff').style.display = isManagerGlobal ? '' : 'none';
+            document.getElementById('claim-admin-btn').style.display = data.hasAnyManager ? 'none' : '';
+            document.getElementById('reports-link').style.display = isManagerGlobal ? '' : 'none';
+        } catch (e) {
+            console.error('Failed to check user role:', e);
+        }
+    }
+
+    async function claimAdmin() {
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/staff/claim-admin'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data?.error || 'Failed to claim admin');
+
+            showToast('You are now the admin', 'success');
+            await checkUserRole();
+            await loadStaff(true);
+            updateClaimStaffVisibility();
+            switchTab('staff');
+        } catch (e) {
+            showError(e.message);
+        }
+    }
+
+    async function openClaimStaffModal() {
+        document.getElementById('claim-staff-modal').classList.remove('hidden');
+        const list = document.getElementById('claim-staff-list');
+        list.innerHTML = '<p class="text-sm text-zinc-500">Loading...</p>';
+        try {
+            const res = await window.shopifyApiFetch(apiUrl('/api/staff/unclaimed'));
+            if (!res.ok) throw new Error('Failed to load staff list');
+            const data = await res.json();
+            const unclaimed = data.staff || [];
+            list.innerHTML = unclaimed.map(s => `
+                <button onclick="claimStaff('${s.id}')" class="w-full text-left px-3 py-2 border border-zinc-200 rounded-md text-sm hover:bg-zinc-50 flex justify-between items-center">
+                    <span>${escapeHtml(s.name)}</span>
+                    <span class="text-xs text-zinc-400">${s.role === 'manager' ? 'Manager' : 'Sales Rep'}</span>
+                </button>
+            `).join('') || '<p class="text-sm text-zinc-500 text-center py-4">No unclaimed staff records. Ask a manager to add you first.</p>';
+        } catch (e) {
+            list.innerHTML = `<p class="text-sm text-red-500">${escapeHtml(e.message)}</p>`;
+        }
+    }
+
+    function closeClaimStaffModal() {
+        document.getElementById('claim-staff-modal').classList.add('hidden');
+    }
+
+    async function claimStaff(staffId) {
+        try {
+            const res = await window.shopifyApiFetch(apiUrl(`/api/staff/${staffId}/claim`), { method: 'POST' });
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(data?.error || 'Failed to link account');
+
+            showToast('Account linked', 'success');
+            closeClaimStaffModal();
+            await loadStaff(true);
+            updateClaimStaffVisibility();
+            renderCustomers();
+        } catch (e) {
+            showError(e.message);
+        }
+    }
+
+    // Map functions (existing)
     function renderSummary() {
         document.getElementById('locations-stat').textContent = locations.length.toLocaleString();
-
         const synced = locations.filter(l => l.latitude && l.longitude).length;
         document.getElementById('synced-stat').textContent = synced.toLocaleString();
-
         const missing = locations.length - synced;
         document.getElementById('missing-stat').textContent = missing.toLocaleString();
     }
@@ -219,9 +1369,10 @@
             (l.country || '').toLowerCase().includes(search)
         );
 
-        const list = document.getElementById('locations-list');
+        const pageItems = paginate(filtered, paginationState.locations, 'locations-pagination', 'goToLocationPage', 'setLocationPageSize');
 
-        list.innerHTML = filtered.map(l => {
+        const list = document.getElementById('locations-list');
+        list.innerHTML = pageItems.map(l => {
             const hasCoords = l.latitude && l.longitude;
             return `
                 <div class="p-3 hover:bg-zinc-50 rounded-lg cursor-pointer transition-colors border-b border-zinc-100 last:border-0" onclick="flyToLocation(${l.latitude || 0}, ${l.longitude || 0})">
@@ -241,25 +1392,35 @@
         }).join('') || '<div class="p-8 text-center text-zinc-500"><span class="material-symbols-outlined text-4xl mb-2">search_off</span><p>No locations found</p></div>';
     }
 
+    function onLocationSearchInput() {
+        paginationState.locations.page = 1;
+        renderLocations();
+    }
+
+    function goToLocationPage(page) {
+        paginationState.locations.page = page;
+        renderLocations();
+    }
+
+    function setLocationPageSize(size) {
+        paginationState.locations.pageSize = parseInt(size, 10);
+        paginationState.locations.page = 1;
+        renderLocations();
+    }
+
     function initMap() {
         if (!MAPBOX_TOKEN) return;
-
         document.getElementById('map-placeholder').style.display = 'none';
-
         try {
             mapboxgl.accessToken = MAPBOX_TOKEN;
             map = new mapboxgl.Map({
                 container: 'map',
                 style: 'mapbox://styles/mapbox/light-v11',
-                center: [-98.5795, 39.8283], // Center of US
+                center: [-98.5795, 39.8283],
                 zoom: 3
             });
-
             map.addControl(new mapboxgl.NavigationControl());
-
-            map.on('load', () => {
-                updateMarkers();
-            });
+            map.on('load', () => updateMarkers());
         } catch (e) {
             console.error('Mapbox init error:', e);
             document.getElementById('map-placeholder').style.display = 'flex';
@@ -268,57 +1429,36 @@
 
     function updateMarkers() {
         if (!map) return;
-
-        // Clear existing
         markers.forEach(m => m.remove());
         markers = [];
-
         const bounds = new mapboxgl.LngLatBounds();
         let hasValidCoords = false;
-
         locations.forEach(loc => {
             const lat = parseFloat(loc.latitude);
             const lng = parseFloat(loc.longitude);
-
             if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
                 hasValidCoords = true;
-
-                // Create popup
-                const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(
-                    `<div class="p-2">
+                const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(`
+                    <div class="p-2">
                         <h3 class="font-bold text-sm">${loc.business_name || 'B2B Location'}</h3>
                         <p class="text-xs text-gray-600">${loc.address_line_1 || ''}</p>
                         <p class="text-xs text-gray-600">${[loc.city, loc.province_state, loc.country].filter(Boolean).join(', ')}</p>
-                    </div>`
-                );
-
-                // Create marker
+                    </div>
+                `);
                 const el = document.createElement('div');
                 el.className = 'w-6 h-6 bg-[#008060] rounded-full border-2 border-white shadow-md flex items-center justify-center cursor-pointer';
                 el.innerHTML = '<span class="w-2 h-2 bg-white rounded-full"></span>';
-
-                const marker = new mapboxgl.Marker(el)
-                    .setLngLat([lng, lat])
-                    .setPopup(popup)
-                    .addTo(map);
-
+                const marker = new mapboxgl.Marker(el).setLngLat([lng, lat]).setPopup(popup).addTo(map);
                 markers.push(marker);
                 bounds.extend([lng, lat]);
             }
         });
-
-        if (hasValidCoords && markers.length > 0) {
-            map.fitBounds(bounds, { padding: 50, maxZoom: 10 });
-        }
+        if (hasValidCoords && markers.length > 0) map.fitBounds(bounds, { padding: 50, maxZoom: 10 });
     }
 
     function flyToLocation(lat, lng) {
         if (!map || !lat || !lng) return;
-        map.flyTo({
-            center: [lng, lat],
-            zoom: 12,
-            essential: true
-        });
+        map.flyTo({ center: [lng, lat], zoom: 12, essential: true });
     }
 
     async function syncMap() {
@@ -326,7 +1466,6 @@
         const original = btn.innerHTML;
         btn.disabled = true;
         btn.innerHTML = '<span class="material-symbols-outlined text-sm animate-spin">sync</span> Syncing...';
-
         try {
             const res = await window.shopifyApiFetch(apiUrl('/api/sync-b2b-map'), { method: 'POST' });
             const raw = await res.text();
@@ -334,17 +1473,13 @@
             try {
                 data = raw ? JSON.parse(raw) : null;
             } catch {
-                if (res.status === 504) {
-                    throw new Error('Sync timed out on the server. Re-run sync (it continues from cached coords) or raise function maxDuration.');
-                }
+                if (res.status === 504) throw new Error('Sync timed out on the host. Click Run Map Sync again — already-geocoded locations are skipped.');
                 throw new Error((raw || `HTTP ${res.status}`).slice(0, 180));
             }
             if (!res.ok) throw new Error(data?.error || 'Sync failed');
-
-            const incompleteNote = data.incomplete ? ' (partial — run again to continue)' : '';
-            showToast(`Sync Complete! Created: ${data.created}, Updated: ${data.updated}${incompleteNote}`, 'success');
-
-            // Reload data
+            const incompleteNote = data.incomplete ? ' Partial run — click Run Map Sync again to continue.' : '';
+            const skipNote = data.skipped ? `, skipped: ${data.skipped}` : '';
+            showToast(`Sync complete. Created: ${data.created || 0}, updated: ${data.updated || 0}${skipNote}.${incompleteNote}`, 'success');
             await loadData();
         } catch (e) {
             showError('Sync failed: ' + e.message);
@@ -354,10 +1489,20 @@
         }
     }
 
+    // Close modal on background click
+    document.getElementById('staff-modal').addEventListener('click', (e) => {
+        if (e.target.id === 'staff-modal') closeAddStaffModal();
+    });
+    document.getElementById('claim-staff-modal').addEventListener('click', (e) => {
+        if (e.target.id === 'claim-staff-modal') closeClaimStaffModal();
+    });
+
     let started = false;
-    function init() {
+    async function init() {
         if (started) return;
         started = true;
+        await Promise.all([checkUserRole(), loadStaff(true)]);
+        updateClaimStaffVisibility();
         loadData();
     }
     window.addEventListener('shopify:api-fetch-ready', init, { once: true });
