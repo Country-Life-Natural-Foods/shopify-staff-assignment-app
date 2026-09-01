@@ -20,3 +20,24 @@ redirect_urls = [
 
 [pos]
 embedded = false
+
+# PIN-protected leadership accounts for Reports / Staff. PIN hashes stay app-owned.
+[metaobjects.app.app_user]
+name = "App User"
+description = "Leadership accounts that can open Reports with a PIN"
+display_name_field = "name"
+
+[metaobjects.app.app_user.fields.name]
+name = "Name"
+type = "single_line_text_field"
+required = true
+
+[metaobjects.app.app_user.fields.pin_hash]
+name = "PIN hash"
+type = "single_line_text_field"
+required = true
+
+[metaobjects.app.app_user.fields.is_admin]
+name = "Admin"
+type = "boolean"
+required = true

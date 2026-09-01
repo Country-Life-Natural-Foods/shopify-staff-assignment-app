@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Staff</title>
+    <script src="https://cdn.shopify.com/shopifycloud/polaris.js"></script>
+</head>
+<body>
+<s-app-nav>
+    <s-link href="/reports">Reports</s-link>
+    <s-link href="/staff">Staff</s-link>
+</s-app-nav>
+
+<div id="gate">
+    <s-page heading="Staff">
+        <s-banner id="gate-banner" tone="info" hidden></s-banner>
+        <div id="setup-panel" hidden>
+        <s-section heading="Create the first admin account">
+            <s-stack gap="base">
+                <s-text>Staff account management is PIN-protected. Create your admin account first, then add other leadership users here.</s-text>
+                <s-text-field id="setup-name" label="Account name" name="name" value="Admin" required></s-text-field>
+                <s-password-field id="setup-pin" label="PIN" name="pin" autocomplete="new-password" required></s-password-field>
+                <s-text color="subdued">Use 4 to 8 digits.</s-text>
+                <s-button id="setup-btn" variant="primary">Create admin account</s-button>
+            </s-stack>
+        </s-section>
+        </div>
+        <div id="login-panel" hidden>
+        <s-section heading="Sign in">
+            <s-stack gap="base">
+                <s-select id="account-select" label="Account" name="account"></s-select>
+                <s-password-field id="pin-field" label="PIN" name="pin" autocomplete="current-password" required></s-password-field>
+                <s-button id="login-btn" variant="primary">Continue</s-button>
+            </s-stack>
+        </s-section>
+        </div>
+    </s-page>
+</div>
+
+<div id="admin-app" hidden>
+    <s-page heading="Staff">
+        <s-button id="sign-out-btn" slot="primary-action" variant="tertiary">Sign out</s-button>
+        <s-text id="whoami" color="subdued"></s-text>
+        <s-banner id="staff-banner" tone="info" hidden></s-banner>
+        <s-section heading="Leadership accounts">
+            <s-text>Admins can manage these accounts. Any account with a PIN can open Reports.</s-text>
+            <div id="users-table"></div>
+        </s-section>
+        <s-section heading="Add account">
+            <s-stack gap="base">
+                <s-text-field id="new-name" label="Name" name="name" required></s-text-field>
+                <s-password-field id="new-pin" label="PIN" name="pin" autocomplete="new-password" required></s-password-field>
+                <s-checkbox id="new-admin" label="Admin" name="isAdmin"></s-checkbox>
+                <s-button id="add-user-btn" variant="primary">Add account</s-button>
+            </s-stack>
+        </s-section>
+    </s-page>
+</div>
+
+<script>window.shopifyApiFetch = window.fetch.bind(window);</script>
+<script type="module" src="/shopify-session-bootstrap.js"></script>
+<script src="/admin-app.js"></script>
+<script>
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    async function loadUsers() {
+        const banner = document.getElementById('staff-banner');
+        window.AdminApp.setBanner(banner, 'info', '');
+        try {
+            const data = await window.AdminApp.fetch('/api/admin/users');
+            const rows = (data.users || []).map((user) => {
+                const role = user.isAdmin ? 'Admin' : 'Reports';
+                const handle = escapeHtml(user.handle);
+                const remove = `<s-button variant="tertiary" tone="critical" data-remove="${handle}">Remove</s-button>`;
+                const toggle = user.isAdmin
+                    ? `<s-button variant="tertiary" data-demote="${handle}">Remove admin</s-button>`
+                    : `<s-button variant="tertiary" data-promote="${handle}">Make admin</s-button>`;
+                return [escapeHtml(user.name), role, `${toggle} ${remove}`];
+            });
+            const root = document.getElementById('users-table');
+            if (!rows.length) {
+                root.innerHTML = '<s-text color="subdued">No accounts yet.</s-text>';
+                return;
+            }
+            root.innerHTML = `
+                <s-table>
+                    <s-table-header-row>
+                        <s-table-header listSlot="primary">Name</s-table-header>
+                        <s-table-header>Access</s-table-header>
+                        <s-table-header>Actions</s-table-header>
+                    </s-table-header-row>
+                    <s-table-body>
+                        ${rows.map((cols) => `<s-table-row>${cols.map((c) => `<s-table-cell>${c}</s-table-cell>`).join('')}</s-table-row>`).join('')}
+                    </s-table-body>
+                </s-table>
+            `;
+            root.querySelectorAll('[data-remove]').forEach((btn) => {
+                btn.addEventListener('click', () => changeUser('remove', btn.getAttribute('data-remove')));
+            });
+            root.querySelectorAll('[data-promote]').forEach((btn) => {
+                btn.addEventListener('click', () => changeUser('promote', btn.getAttribute('data-promote')));
+            });
+            root.querySelectorAll('[data-demote]').forEach((btn) => {
+                btn.addEventListener('click', () => changeUser('demote', btn.getAttribute('data-demote')));
+            });
+        } catch (err) {
+            window.AdminApp.setBanner(banner, 'critical', err.message);
+        }
+    }
+
+    async function changeUser(action, id) {
+        const banner = document.getElementById('staff-banner');
+        try {
+            if (action === 'remove') {
+                await window.AdminApp.fetch(`/api/admin/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            } else {
+                await window.AdminApp.fetch(`/api/admin/users/${encodeURIComponent(id)}`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ isAdmin: action === 'promote' }),
+                });
+            }
+            await loadUsers();
+        } catch (err) {
+            window.AdminApp.setBanner(banner, 'critical', err.message);
+        }
+    }
+
+    async function addUser() {
+        const banner = document.getElementById('staff-banner');
+        try {
+            await window.AdminApp.fetch('/api/admin/users', {
+                method: 'POST',
+                body: JSON.stringify({
+                    name: document.getElementById('new-name').value,
+                    pin: document.getElementById('new-pin').value,
+                    isAdmin: Boolean(document.getElementById('new-admin').checked),
+                }),
+            });
+            document.getElementById('new-name').value = '';
+            document.getElementById('new-pin').value = '';
+            document.getElementById('new-admin').checked = false;
+            await loadUsers();
+        } catch (err) {
+            window.AdminApp.setBanner(banner, 'critical', err.message);
+        }
+    }
+
+    let started = false;
+    function start() {
+        if (started) return;
+        started = true;
+        document.getElementById('add-user-btn').addEventListener('click', addUser);
+        window.AdminApp.initGate({
+            requireAdmin: true,
+            onReady: loadUsers,
+        });
+    }
+    window.addEventListener('admin-app-ready', start);
+</script>
+</body>
+</html>

@@ -38,6 +38,24 @@ const {
   resolveShopifyHostName,
 } = require('../lib/resolve-shopify-hostname');
 const { configureSessionStorage } = require('../lib/configure-session-storage');
+const {
+  listAppUsers,
+  upsertAppUser,
+  deleteAppUser,
+  verifyPin,
+  toHandle,
+} = require('../lib/app-users');
+const {
+  assertNotLocked,
+  recordPinFailure,
+  clearPinGuard,
+  setAppUserSession,
+  publicSession,
+  requireAppUser,
+  requireAdmin,
+} = require('../lib/admin-auth');
+const { buildReportSummary } = require('../lib/reports-data');
+const { isMissingDefinition } = require('../lib/shopify-gql');
 
 applyShopifyDeploymentEnv();
 
@@ -163,6 +181,8 @@ const shopifyAppInstance = shopifyApp({
       'read_customers',
       'write_customers',
       'read_orders',
+      'read_metaobjects',
+      'write_metaobjects',
     ],
     hostName,
     hostScheme,
@@ -198,6 +218,19 @@ app.post(
 
 // Routes (before static — do not let express.static answer `/` with public/index.html; we inject App Bridge meta)
 app.get('/test-ui', (req, res) => sendAppHtmlFile(res, 'index.html'));
+app.get('/test-ui/reports', (req, res) => sendAppHtmlFile(res, 'reports.html'));
+app.get('/test-ui/staff', (req, res) => sendAppHtmlFile(res, 'staff.html'));
+
+function sendAppPage(filename) {
+  return (req, res) => {
+    try {
+      sendAppHtmlFile(res, filename);
+    } catch (error) {
+      console.error('Error loading app page', filename, error);
+      res.status(500).send('Internal server error');
+    }
+  };
+}
 
 app.get('/exitiframe', (req, res) => {
   const redirectUri = req.query.redirectUri;
@@ -255,16 +288,10 @@ app.get(
   '/',
   ensureInstalledOnShop,
   shopifyCspHeaders,
-  (req, res) => {
-    try {
-      const homeHtml = process.env.APP_HOME_HTML || 'index.html';
-      sendAppHtmlFile(res, homeHtml);
-    } catch (error) {
-      console.error('Error loading app:', error);
-      res.status(500).send('Internal server error');
-    }
-  },
+  sendAppPage(process.env.APP_HOME_HTML || 'index.html'),
 );
+app.get('/reports', ensureInstalledOnShop, shopifyCspHeaders, sendAppPage('reports.html'));
+app.get('/staff', ensureInstalledOnShop, shopifyCspHeaders, sendAppPage('staff.html'));
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -516,6 +543,212 @@ app.post('/api/sync-b2b-map', validateAuthenticatedSession, async (req, res) => 
   } catch (err) {
     console.error('B2B Map Sync error:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+function sendAppUserError(res, err) {
+  if (isMissingDefinition(err)) {
+    return res.status(409).json({
+      error: 'Leadership accounts are not set up on this shop yet. Run shopify app deploy, then open Staff to create the first admin account.',
+      code: 'APP_USER_DEFINITION_MISSING',
+    });
+  }
+  const status = err.status || 500;
+  return res.status(status).json({ error: err.message });
+}
+
+function withoutPinHash(user) {
+  return {
+    id: user.id,
+    handle: user.handle,
+    name: user.name,
+    isAdmin: user.isAdmin,
+  };
+}
+
+app.get('/api/app-users', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+    const users = await listAppUsers(client);
+    res.json({ users: users.map(withoutPinHash) });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/app-users', error);
+    return sendAppUserError(res, error);
+  }
+});
+
+app.get('/api/admin/me', validateAuthenticatedSession, (req, res) => {
+  const user = publicSession(req);
+  if (!user) return res.status(401).json({ error: 'PIN sign-in required', code: 'ADMIN_PIN_REQUIRED' });
+  res.json({ user });
+});
+
+app.post('/api/admin/logout', validateAuthenticatedSession, (req, res) => {
+  req.session.appUser = null;
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/setup', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+    const users = await listAppUsers(client);
+    if (users.length > 0) {
+      return res.status(409).json({ error: 'An admin account already exists. Sign in with PIN.' });
+    }
+    const name = String(req.body?.name || 'Admin').trim() || 'Admin';
+    const created = await upsertAppUser(client, {
+      handle: toHandle(name),
+      name,
+      pin: req.body?.pin,
+      isAdmin: true,
+    });
+    const user = { id: created.id, handle: created.handle, name, isAdmin: true };
+    setAppUserSession(req, user);
+    clearPinGuard(req);
+    res.json({ user });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('POST /api/admin/setup', error);
+    return sendAppUserError(res, error);
+  }
+});
+
+app.post('/api/admin/login', validateAuthenticatedSession, async (req, res) => {
+  try {
+    assertNotLocked(req);
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+    const users = await listAppUsers(client);
+    const user = users.find((u) => u.id === req.body?.userId);
+    if (!user || !verifyPin(req.body?.pin, user.pinHash)) {
+      recordPinFailure(req);
+      return res.status(401).json({ error: 'Account or PIN is incorrect' });
+    }
+    clearPinGuard(req);
+    const publicUser = withoutPinHash(user);
+    setAppUserSession(req, publicUser);
+    res.json({ user: publicUser });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('POST /api/admin/login', error);
+    return sendAppUserError(res, error);
+  }
+});
+
+app.get('/api/admin/users', validateAuthenticatedSession, requireAdmin, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+    const users = await listAppUsers(client);
+    res.json({ users: users.map(withoutPinHash) });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/admin/users', error);
+    return sendAppUserError(res, error);
+  }
+});
+
+app.post('/api/admin/users', validateAuthenticatedSession, requireAdmin, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    const created = await upsertAppUser(client, {
+      handle: toHandle(name),
+      name,
+      pin: req.body?.pin,
+      isAdmin: Boolean(req.body?.isAdmin),
+    });
+    res.json({ user: { id: created.id, handle: created.handle, name, isAdmin: Boolean(req.body?.isAdmin) } });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('POST /api/admin/users', error);
+    return sendAppUserError(res, error);
+  }
+});
+
+app.patch('/api/admin/users/:handle', validateAuthenticatedSession, requireAdmin, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+    const users = await listAppUsers(client);
+    const user = users.find((u) => u.handle === req.params.handle);
+    if (!user) return res.status(404).json({ error: 'Account not found' });
+    const nextAdmin = req.body?.isAdmin == null ? user.isAdmin : Boolean(req.body.isAdmin);
+    if (user.isAdmin && !nextAdmin && users.filter((u) => u.isAdmin).length <= 1) {
+      return res.status(400).json({ error: 'Keep at least one admin account' });
+    }
+    const name = String(req.body?.name || user.name).trim() || user.name;
+    await upsertAppUser(client, {
+      handle: user.handle,
+      name,
+      pin: req.body?.pin || null,
+      pinHash: req.body?.pin ? undefined : user.pinHash,
+      isAdmin: nextAdmin,
+    });
+    if (req.session.appUser?.id === user.id) {
+      setAppUserSession(req, { ...withoutPinHash(user), name, isAdmin: nextAdmin });
+    }
+    res.json({ user: { id: user.id, handle: user.handle, name, isAdmin: nextAdmin } });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('PATCH /api/admin/users/:handle', error);
+    return sendAppUserError(res, error);
+  }
+});
+
+app.delete('/api/admin/users/:handle', validateAuthenticatedSession, requireAdmin, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+    const users = await listAppUsers(client);
+    const user = users.find((u) => u.handle === req.params.handle);
+    if (!user) return res.status(404).json({ error: 'Account not found' });
+    if (user.isAdmin && users.filter((u) => u.isAdmin).length <= 1) {
+      return res.status(400).json({ error: 'Keep at least one admin account' });
+    }
+    await deleteAppUser(client, user.id);
+    if (req.session.appUser?.id === user.id) {
+      req.session.appUser = null;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('DELETE /api/admin/users/:handle', error);
+    return sendAppUserError(res, error);
+  }
+});
+
+app.get('/api/reports/summary', validateAuthenticatedSession, requireAppUser, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+    const summary = await buildReportSummary(client);
+    res.json(summary);
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/reports/summary', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

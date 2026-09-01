@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Reports</title>
+    <script src="https://cdn.shopify.com/shopifycloud/polaris.js"></script>
+</head>
+<body>
+<s-app-nav>
+    <s-link href="/reports">Reports</s-link>
+    <s-link href="/staff">Staff</s-link>
+</s-app-nav>
+
+<div id="gate">
+    <s-page heading="Reports">
+        <s-banner id="gate-banner" tone="info" hidden></s-banner>
+        <div id="setup-panel" hidden>
+        <s-section heading="Create the first admin account">
+            <s-stack gap="base">
+                <s-text>Reports are PIN-protected. Create your admin account to continue. You can add other leadership accounts later under Staff.</s-text>
+                <s-text-field id="setup-name" label="Account name" name="name" value="Admin" required></s-text-field>
+                <s-password-field id="setup-pin" label="PIN" name="pin" autocomplete="new-password" required></s-password-field>
+                <s-text color="subdued">Use 4 to 8 digits. This PIN is stored as a hash on your shop, not as plain text.</s-text>
+                <s-button id="setup-btn" variant="primary">Create admin account</s-button>
+            </s-stack>
+        </s-section>
+        </div>
+        <div id="login-panel" hidden>
+        <s-section heading="Sign in">
+            <s-stack gap="base">
+                <s-select id="account-select" label="Account" name="account"></s-select>
+                <s-password-field id="pin-field" label="PIN" name="pin" autocomplete="current-password" required></s-password-field>
+                <s-button id="login-btn" variant="primary">Continue</s-button>
+            </s-stack>
+        </s-section>
+        </div>
+    </s-page>
+</div>
+
+<div id="admin-app" hidden>
+    <s-page heading="Reports">
+        <s-button id="sign-out-btn" slot="primary-action" variant="tertiary">Sign out</s-button>
+        <s-text id="whoami" color="subdued"></s-text>
+        <s-banner id="report-banner" tone="info" hidden></s-banner>
+        <s-section heading="Coverage">
+            <s-grid gridTemplateColumns="1fr 1fr 1fr" gap="base">
+                <s-box padding="base" background="subdued" borderRadius="base">
+                    <s-text>Companies</s-text>
+                    <s-heading id="stat-companies">—</s-heading>
+                </s-box>
+                <s-box padding="base" background="subdued" borderRadius="base">
+                    <s-text>Assigned</s-text>
+                    <s-heading id="stat-assigned">—</s-heading>
+                </s-box>
+                <s-box padding="base" background="subdued" borderRadius="base">
+                    <s-text>Unassigned</s-text>
+                    <s-heading id="stat-unassigned">—</s-heading>
+                </s-box>
+            </s-grid>
+        </s-section>
+        <s-section heading="Map sync">
+            <s-grid gridTemplateColumns="1fr 1fr 1fr" gap="base">
+                <s-box padding="base" background="subdued" borderRadius="base">
+                    <s-text>Locations</s-text>
+                    <s-heading id="stat-locations">—</s-heading>
+                </s-box>
+                <s-box padding="base" background="subdued" borderRadius="base">
+                    <s-text>Synced</s-text>
+                    <s-heading id="stat-synced">—</s-heading>
+                </s-box>
+                <s-box padding="base" background="subdued" borderRadius="base">
+                    <s-text>Missing coordinates</s-text>
+                    <s-heading id="stat-missing">—</s-heading>
+                </s-box>
+            </s-grid>
+        </s-section>
+        <s-section heading="Recent B2B orders">
+            <s-grid gridTemplateColumns="1fr 1fr 1fr" gap="base">
+                <s-box padding="base" background="subdued" borderRadius="base">
+                    <s-text>Orders sampled</s-text>
+                    <s-heading id="stat-orders">—</s-heading>
+                </s-box>
+                <s-box padding="base" background="subdued" borderRadius="base">
+                    <s-text>B2B orders</s-text>
+                    <s-heading id="stat-b2b">—</s-heading>
+                </s-box>
+                <s-box padding="base" background="subdued" borderRadius="base">
+                    <s-text>Revenue in sample</s-text>
+                    <s-heading id="stat-revenue">—</s-heading>
+                </s-box>
+            </s-grid>
+        </s-section>
+        <s-section heading="Unassigned companies">
+            <div id="unassigned-table"></div>
+        </s-section>
+        <s-section heading="Staff coverage">
+            <div id="staff-table"></div>
+        </s-section>
+        <s-section heading="Top companies in sample">
+            <div id="top-table"></div>
+        </s-section>
+    </s-page>
+</div>
+
+<script>window.shopifyApiFetch = window.fetch.bind(window);</script>
+<script type="module" src="/shopify-session-bootstrap.js"></script>
+<script src="/admin-app.js"></script>
+<script>
+    function money(amount, currency) {
+        const n = Number(amount) || 0;
+        try {
+            return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency || 'USD' }).format(n);
+        } catch {
+            return `${n.toFixed(2)} ${currency || ''}`.trim();
+        }
+    }
+
+    function renderTable(targetId, headers, rows) {
+        const root = document.getElementById(targetId);
+        if (!rows.length) {
+            root.innerHTML = '<s-text color="subdued">None in this sample.</s-text>';
+            return;
+        }
+        const head = headers.map((h, i) =>
+            `<s-table-header${i === 0 ? ' listSlot="primary"' : ''}>${h}</s-table-header>`
+        ).join('');
+        const body = rows.map((cols) =>
+            `<s-table-row>${cols.map((c) => `<s-table-cell>${c}</s-table-cell>`).join('')}</s-table-row>`
+        ).join('');
+        root.innerHTML = `<s-table><s-table-header-row>${head}</s-table-header-row><s-table-body>${body}</s-table-body></s-table>`;
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    async function loadReports() {
+        const banner = document.getElementById('report-banner');
+        window.AdminApp.setBanner(banner, 'info', '');
+        try {
+            const data = await window.AdminApp.fetch('/api/reports/summary');
+            const companies = data.companies;
+            const locations = data.locations;
+            const orders = data.orders;
+            document.getElementById('stat-companies').textContent = String(companies.total);
+            document.getElementById('stat-assigned').textContent = String(companies.assigned);
+            document.getElementById('stat-unassigned').textContent = String(companies.unassigned);
+            document.getElementById('stat-locations').textContent = String(locations.total);
+            document.getElementById('stat-synced').textContent = String(locations.synced);
+            document.getElementById('stat-missing').textContent = String(locations.missing);
+            document.getElementById('stat-orders').textContent = String(orders.orderCount);
+            document.getElementById('stat-b2b').textContent = String(orders.b2bCount);
+            document.getElementById('stat-revenue').textContent = money(orders.revenue, orders.currency);
+
+            const unassigned = companies.rows.filter((row) => !row.assigned);
+            renderTable(
+                'unassigned-table',
+                ['Company'],
+                unassigned.slice(0, 50).map((row) => [escapeHtml(row.name)]),
+            );
+            renderTable(
+                'staff-table',
+                ['Staff', 'Accounts'],
+                companies.staff.slice(0, 50).map((row) => [escapeHtml(row.name), String(row.accounts)]),
+            );
+            renderTable(
+                'top-table',
+                ['Company', 'Orders', 'Revenue'],
+                orders.topCompanies.map((row) => [
+                    escapeHtml(row.name),
+                    String(row.orders),
+                    money(row.revenue, orders.currency),
+                ]),
+            );
+            const notes = [];
+            if (data.truncated?.companies) notes.push('Company list was capped for speed.');
+            if (data.truncated?.orders) notes.push('Order sample was capped for speed.');
+            if (notes.length) window.AdminApp.setBanner(banner, 'info', notes.join(' '));
+        } catch (err) {
+            window.AdminApp.setBanner(banner, 'critical', err.message);
+        }
+    }
+
+    let started = false;
+    function start() {
+        if (started) return;
+        started = true;
+        window.AdminApp.initGate({
+            requireAdmin: false,
+            onReady: loadReports,
+        });
+    }
+    window.addEventListener('admin-app-ready', start);
+</script>
+</body>
+</html>
