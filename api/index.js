@@ -130,13 +130,33 @@ app.use(express.urlencoded({ extended: true }));
 // recover in seconds instead. It doesn't fix a slow/hung DB call itself, but
 // bounds how long the merchant waits to find out something went wrong.
 const REQUEST_TIMEOUT_MS = 20000;
+// Commission rollups legitimately fan out to Shopify per assigned company.
+// Keep them well under Vercel's 300s cap, but don't treat a 20s aggregation
+// as a hung request the way we do for "/" / session lookups.
+const COMMISSION_AGGREGATION_TIMEOUT_MS = 55000;
+
+function isCommissionAggregationRequest(req) {
+  if (req.method !== 'GET') return false;
+  const p = req.path || '';
+  if (p === '/api/commissions') return true;
+  if (p === '/api/reports/commissions' || p === '/api/reports/commissions/export.csv') return true;
+  return (
+    p.startsWith('/api/commissions/') &&
+    p !== '/api/commissions/access' &&
+    !p.includes('/pin')
+  );
+}
+
 app.use((req, res, next) => {
+  const timeoutMs = isCommissionAggregationRequest(req)
+    ? COMMISSION_AGGREGATION_TIMEOUT_MS
+    : REQUEST_TIMEOUT_MS;
   const timer = setTimeout(() => {
     if (!res.headersSent) {
-      console.error(`[timeout-guard] ${req.method} ${req.originalUrl} exceeded ${REQUEST_TIMEOUT_MS}ms`);
+      console.error(`[timeout-guard] ${req.method} ${req.originalUrl} exceeded ${timeoutMs}ms`);
       res.status(503).json({ error: 'Temporarily unavailable, please retry.', code: 'TIMEOUT_GUARD' });
     }
-  }, REQUEST_TIMEOUT_MS);
+  }, timeoutMs);
   timer.unref?.();
   res.on('finish', () => clearTimeout(timer));
   res.on('close', () => clearTimeout(timer));
@@ -547,11 +567,66 @@ const contactOrderStats = (company) => {
 // read_orders is already in this app's scope list below and was never removed,
 // so no scope/reauth change is needed for this field.
 //
+// Shopify GraphQL is one HTTP round-trip per query. Commissions used to
+// await fetchCompanyRevenueSince sequentially and trip the timeout-guard.
+// A small pool stays inside Shopify's leaky bucket while finishing in seconds.
+const COMMISSION_SHOPIFY_CONCURRENCY = 5;
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  if (!items.length) return [];
+  const results = new Array(items.length);
+  let next = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const i = next;
+        next += 1;
+        if (i >= items.length) return;
+        results[i] = await mapper(items[i], i);
+      }
+    }),
+  );
+  return results;
+}
+
 // Contact customer.lastOrder fills in cadence when Company.orders is empty but
 // the linked buyer accounts have real order history (see uniqueContactCustomers).
-const fetchAllCompanies = async (client) => {
+//
+// `mode: 'commissions'` skips CRM-only fields (notes, contacts, spend stats)
+// so the commission rollup doesn't pay for a full Customers-tab payload
+// before it even starts the per-company revenue queries.
+const fetchAllCompanies = async (client, { mode = 'full' } = {}) => {
   if (!client) return [];
-  const query = `
+  const query = mode === 'commissions'
+    ? `
+    query getCompaniesForCommissions($first: Int!, $after: String) {
+      companies(first: $first, after: $after) {
+        edges {
+          node {
+            id
+            name
+            recentOrders: orders(first: 1, reverse: true) {
+              edges {
+                node {
+                  createdAt
+                }
+              }
+            }
+            assignedStaffMetafield: metafield(namespace: "clnf", key: "assigned_staff") {
+              value
+              updatedAt
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  `
+    : `
     query getCompanies($first: Int!, $after: String) {
       companies(first: $first, after: $after) {
         edges {
@@ -772,6 +847,12 @@ const fetchCompanyRevenueSince = async (client, companyId, sinceIso, untilIso = 
 
   return { totalSpend, orderCount, lastOrderDate };
 };
+
+async function fetchCompaniesRevenueSince(client, jobs) {
+  return mapWithConcurrency(jobs, COMMISSION_SHOPIFY_CONCURRENCY, (job) =>
+    fetchCompanyRevenueSince(client, job.companyId, job.sinceIso, job.untilIso || null),
+  );
+}
 
 // API Endpoints
 app.get('/api/companies', validateAuthenticatedSession, async (req, res) => {
@@ -1393,7 +1474,7 @@ async function buildCommissionReport(req, res, monthParam) {
   if (!client) return { status: 401, error: 'Unauthorized' };
 
   const period = resolveReportMonth(monthParam);
-  const companies = await fetchAllCompanies(client);
+  const companies = await fetchAllCompanies(client, { mode: 'commissions' });
   const allStaff = await staffStore.list();
 
   // Every staff member gets an entry — including reps with $0 this period —
@@ -1412,6 +1493,7 @@ async function buildCommissionReport(req, res, monthParam) {
     };
   }
 
+  const reportJobs = [];
   for (const company of companies) {
     const assigned = company.assignedStaff;
     const rep = assigned?.staffId ? repsMap[assigned.staffId] : null;
@@ -1421,25 +1503,38 @@ async function buildCommissionReport(req, res, monthParam) {
     const effectiveSince = assignedAt && assignedAt > period.start ? assignedAt : period.start;
     if (effectiveSince > period.end) continue; // assigned after this period closed — nothing earned yet
 
-    const revenueSince = await fetchCompanyRevenueSince(
-      client,
-      company.id,
-      effectiveSince.toISOString(),
-      period.end.toISOString(),
-    );
-    const revenue = revenueSince.totalSpend;
-    const commission = (revenue * rep.commissionTier) / 100;
+    reportJobs.push({
+      company,
+      assigned,
+      rep,
+      sinceIso: effectiveSince.toISOString(),
+      untilIso: period.end.toISOString(),
+    });
+  }
 
-    rep.companies.push({
-      companyId: company.id,
-      companyName: company.name,
+  const revenues = await fetchCompaniesRevenueSince(
+    client,
+    reportJobs.map((job) => ({
+      companyId: job.company.id,
+      sinceIso: job.sinceIso,
+      untilIso: job.untilIso,
+    })),
+  );
+
+  reportJobs.forEach((job, i) => {
+    const revenue = revenues[i].totalSpend;
+    const commission = (revenue * job.rep.commissionTier) / 100;
+
+    job.rep.companies.push({
+      companyId: job.company.id,
+      companyName: job.company.name,
       revenue,
       commission,
-      assignedAt: assigned.assignedAt || null,
+      assignedAt: job.assigned.assignedAt || null,
     });
-    rep.totalRevenue += revenue;
-    rep.totalCommission += commission;
-  }
+    job.rep.totalRevenue += revenue;
+    job.rep.totalCommission += commission;
+  });
 
   const reps = Object.values(repsMap).sort((a, b) => b.totalCommission - a.totalCommission);
   const totals = reps.reduce(
@@ -1568,19 +1663,31 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
     }
 
     // Fetch all companies with their app-owned rep assignment and revenue
-    const companies = await fetchAllCompanies(client);
+    const companies = await fetchAllCompanies(client, { mode: 'commissions' });
+    const allStaff = await staffStore.list();
+    const staffById = new Map(allStaff.map((s) => [s.id, s]));
 
-    // Build commission data by staff
-    const commissionsMap = {};
-
+    const commissionJobs = [];
     for (const company of companies) {
       const assigned = company.assignedStaff;
       if (!assigned?.staffId) continue;
       if (!isUserManager && assigned.staffId !== ownStaff.id) continue;
-
-      const staffRecord = await staffStore.findById(assigned.staffId);
+      const staffRecord = staffById.get(assigned.staffId);
       if (!staffRecord) continue;
+      commissionJobs.push({ company, assigned, staffRecord });
+    }
 
+    const revenues = await fetchCompaniesRevenueSince(
+      client,
+      commissionJobs.map((job) => ({
+        companyId: job.company.id,
+        sinceIso: job.assigned.assignedAt,
+      })),
+    );
+
+    const commissionsMap = {};
+    commissionJobs.forEach((job, i) => {
+      const { company, assigned, staffRecord } = job;
       if (!commissionsMap[staffRecord.id]) {
         commissionsMap[staffRecord.id] = {
           staffId: staffRecord.id,
@@ -1595,8 +1702,7 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
 
       // Commission is earned only on orders placed since this rep took over the
       // account (see fetchCompanyRevenueSince) — not the company's lifetime spend.
-      const revenueSince = await fetchCompanyRevenueSince(client, company.id, assigned.assignedAt);
-      const revenue = revenueSince.totalSpend;
+      const revenue = revenues[i].totalSpend;
       const commission = (revenue * staffRecord.commissionTier) / 100;
 
       commissionsMap[staffRecord.id].companies.push({
@@ -1610,7 +1716,7 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
 
       commissionsMap[staffRecord.id].totalRevenue += revenue;
       commissionsMap[staffRecord.id].totalCommission += commission;
-    }
+    });
 
     // Non-managers with no linked staff record see nothing (handled by the
     // per-company skip above never populating commissionsMap for them).
@@ -1668,7 +1774,18 @@ app.get('/api/commissions/:staffId', validateAuthenticatedSession, async (req, r
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
-    const companies = await fetchAllCompanies(client);
+    const companies = await fetchAllCompanies(client, { mode: 'commissions' });
+    const assignedCompanies = companies.filter(
+      (company) => company.assignedStaff?.staffId === staffId,
+    );
+    const revenues = await fetchCompaniesRevenueSince(
+      client,
+      assignedCompanies.map((company) => ({
+        companyId: company.id,
+        sinceIso: company.assignedStaff.assignedAt,
+      })),
+    );
+
     const repCommissions = {
       staffId: staffRecord.id,
       name: staffRecord.name,
@@ -1679,11 +1796,8 @@ app.get('/api/commissions/:staffId', validateAuthenticatedSession, async (req, r
       totalCommission: 0
     };
 
-    for (const company of companies) {
-      if (company.assignedStaff?.staffId !== staffId) continue;
-
-      const revenueSince = await fetchCompanyRevenueSince(client, company.id, company.assignedStaff.assignedAt);
-      const revenue = revenueSince.totalSpend;
+    assignedCompanies.forEach((company, i) => {
+      const revenue = revenues[i].totalSpend;
       const commission = (revenue * repCommissions.commissionTier) / 100;
 
       repCommissions.companies.push({
@@ -1698,7 +1812,7 @@ app.get('/api/commissions/:staffId', validateAuthenticatedSession, async (req, r
 
       repCommissions.totalRevenue += revenue;
       repCommissions.totalCommission += commission;
-    }
+    });
 
     if (repCommissions.companies.length === 0) {
       return res.status(404).json({ error: 'No commissions found for this staff member' });
