@@ -218,14 +218,11 @@ app.get('/api/companies', shopifyAppInstance.validateAuthenticatedSession(), asy
     let cursor = null;
 
     while (hasNextPage) {
-      const response = await client.query({
-        data: {
-          query,
-          variables: { first: 50, after: cursor }
-        }
+      const response = await client.request(query, {
+        variables: { first: 50, after: cursor }
       });
 
-      const companies = response.body.data.companies;
+      const companies = response.data.companies;
       allCompanies = allCompanies.concat(companies.edges.map(edge => edge.node));
       hasNextPage = companies.pageInfo.hasNextPage;
       cursor = companies.pageInfo.endCursor;
@@ -272,14 +269,11 @@ app.get('/api/staff', shopifyAppInstance.validateAuthenticatedSession(), async (
     let cursor = null;
 
     while (hasNextPage) {
-      const response = await client.query({
-        data: {
-          query,
-          variables: { first: 50, after: cursor }
-        }
+      const response = await client.request(query, {
+        variables: { first: 50, after: cursor }
       });
 
-      const staff = response.body.data.staffMembers;
+      const staff = response.data.staffMembers;
       allStaff = allStaff.concat(staff.edges.map(edge => edge.node));
       hasNextPage = staff.pageInfo.hasNextPage;
       cursor = staff.pageInfo.endCursor;
@@ -329,17 +323,14 @@ app.post('/api/assign', shopifyAppInstance.validateAuthenticatedSession(), async
       }
     `;
 
-    const response = await client.query({
-      data: {
-        query: mutation,
-        variables: {
-          companyLocationId: companyId, // Note: In UI this is passed as companyId but it should be location ID
-          staffMemberIds: [staffId]
-        }
+    const response = await client.request(mutation, {
+      variables: {
+        companyLocationId: companyId, // Note: In UI this is passed as companyId but it should be location ID
+        staffMemberIds: [staffId]
       }
     });
 
-    const result = response.body.data.companyLocationAssignStaffMembers;
+    const result = response.data.companyLocationAssignStaffMembers;
 
     if (result.userErrors.length > 0) {
       return res.status(400).json({ error: result.userErrors });
@@ -375,14 +366,11 @@ app.delete('/api/assign', shopifyAppInstance.validateAuthenticatedSession(), asy
       }
     `;
 
-    const response = await client.query({
-      data: {
-        query: mutation,
-        variables: { companyLocationStaffMemberAssignmentIds: assignmentIds }
-      }
+    const response = await client.request(mutation, {
+      variables: { companyLocationStaffMemberAssignmentIds: assignmentIds }
     });
 
-    const result = response.body.data.companyLocationRemoveStaffMembers;
+    const result = response.data.companyLocationRemoveStaffMembers;
 
     if (result.userErrors.length > 0) {
       return res.status(400).json({ error: result.userErrors });
@@ -445,16 +433,13 @@ app.post('/api/bulk-assign', shopifyAppInstance.validateAuthenticatedSession(), 
     let cursor = null;
 
     while (hasNextPage) {
-      const response = await client.query({
-        data: {
-          query: companiesQuery,
-          variables: { first: 50, after: cursor }
-        }
+      const response = await client.request(companiesQuery, {
+        variables: { first: 50, after: cursor }
       });
 
-      allCompanies = allCompanies.concat(response.body.data.companies.edges.map(edge => edge.node));
-      hasNextPage = response.body.data.companies.pageInfo.hasNextPage;
-      cursor = response.body.data.companies.pageInfo.endCursor;
+      allCompanies = allCompanies.concat(response.data.companies.edges.map(edge => edge.node));
+      hasNextPage = response.data.companies.pageInfo.hasNextPage;
+      cursor = response.data.companies.pageInfo.endCursor;
     }
 
     // Filter companies by location criteria
@@ -516,17 +501,14 @@ app.post('/api/bulk-assign', shopifyAppInstance.validateAuthenticatedSession(), 
       const locations = company.locations?.edges?.map(e => e.node) || [];
       for (const location of locations) {
         try {
-          const response = await client.query({
-            data: {
-              query: assignmentMutation,
-              variables: {
-                companyLocationId: location.id,
-                staffMemberIds: [staffId]
-              }
+          const response = await client.request(assignmentMutation, {
+            variables: {
+              companyLocationId: location.id,
+              staffMemberIds: [staffId]
             }
           });
 
-          const result = response.body.data.companyLocationAssignStaffMembers;
+          const result = response.data.companyLocationAssignStaffMembers;
 
           if (result.userErrors.length > 0) {
             errorCount++;
@@ -626,16 +608,13 @@ app.post('/api/companies-by-location', shopifyAppInstance.validateAuthenticatedS
     let cursor = null;
 
     while (hasNextPage) {
-      const response = await client.query({
-        data: {
-          query,
-          variables: { first: 50, after: cursor }
-        }
+      const response = await client.request(query, {
+        variables: { first: 50, after: cursor }
       });
 
-      allCompanies = allCompanies.concat(response.body.data.companies.edges.map(edge => edge.node));
-      hasNextPage = response.body.data.companies.pageInfo.hasNextPage;
-      cursor = response.body.data.companies.pageInfo.endCursor;
+      allCompanies = allCompanies.concat(response.data.companies.edges.map(edge => edge.node));
+      hasNextPage = response.data.companies.pageInfo.hasNextPage;
+      cursor = response.data.companies.pageInfo.endCursor;
     }
 
     // Filter companies by location criteria

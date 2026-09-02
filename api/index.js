@@ -40,6 +40,7 @@ const {
 } = require('../lib/resolve-shopify-hostname');
 const { configureSessionStorage } = require('../lib/configure-session-storage');
 const { configureStaffStore } = require('../lib/staff-store');
+const { shopifyGraphql } = require('../lib/shopify-gql');
 
 applyShopifyDeploymentEnv();
 
@@ -397,18 +398,6 @@ const getGraphqlClient = async (req, res) => {
   return new shopify.clients.Graphql({ session: sessionData });
 };
 
-const throwIfGraphqlErrors = (response, label) => {
-  const body = response?.body;
-  const gql = body?.errors?.graphQLErrors;
-  if (Array.isArray(gql) && gql.length > 0) {
-    throw new Error(`${label}: ${gql.map((e) => e.message).join('; ')}`);
-  }
-  const errs = body?.errors;
-  if (Array.isArray(errs) && errs.length) {
-    throw new Error(`${label}: ${errs.map((e) => e.message).join('; ')}`);
-  }
-};
-
 function decodeRouteParam(value) {
   if (!value || typeof value !== 'string') return value;
   try {
@@ -432,9 +421,8 @@ const getCompanyAssignedStaff = async (client, companyId) => {
       }
     }
   `;
-  const response = await client.query({ data: { query, variables: { id: companyId } } });
-  throwIfGraphqlErrors(response, 'fetch company assignment');
-  const value = response.body?.data?.company?.metafield?.value;
+  const data = await shopifyGraphql(client, query, { id: companyId }, 'fetch company assignment');
+  const value = data?.company?.metafield?.value;
   if (!value) return null;
   try {
     return JSON.parse(value) || null;
@@ -467,25 +455,19 @@ const setCompanyMetafield = async (client, companyId, key, value) => {
     }
   `;
 
-  const response = await client.query({
-    data: {
-      query: mutation,
-      variables: {
-        metafields: [
-          {
-            ownerId: companyId,
-            namespace: 'clnf',
-            key,
-            type: 'json',
-            value,
-          },
-        ],
+  const data = await shopifyGraphql(client, mutation, {
+    metafields: [
+      {
+        ownerId: companyId,
+        namespace: 'clnf',
+        key,
+        type: 'json',
+        value,
       },
-    },
-  });
+    ],
+  }, `set company metafield ${key}`);
 
-  throwIfGraphqlErrors(response, `set company metafield ${key}`);
-  const userErrors = response.body?.data?.metafieldsSet?.userErrors;
+  const userErrors = data?.metafieldsSet?.userErrors;
   if (userErrors && userErrors.length > 0) {
     throw new Error(userErrors.map((e) => e.message).join('; '));
   }
@@ -756,11 +738,8 @@ const fetchAllCompanies = async (client, { mode = 'full' } = {}) => {
   const all = [];
 
   while (hasNextPage) {
-    const response = await client.query({
-      data: { query, variables: { first: 50, after: cursor } },
-    });
-    throwIfGraphqlErrors(response, 'companies');
-    const companiesData = response.body?.data?.companies;
+    const data = await shopifyGraphql(client, query, { first: 50, after: cursor }, 'companies');
+    const companiesData = data?.companies;
     if (!companiesData) {
       break;
     }
@@ -820,11 +799,13 @@ const fetchCompanyRevenueSince = async (client, companyId, sinceIso, untilIso = 
   let lastOrderDate = null;
 
   while (hasNextPage) {
-    const response = await client.query({
-      data: { query, variables: { id: companyId, first: 100, after: cursor } },
-    });
-    throwIfGraphqlErrors(response, 'company orders since assignment');
-    const ordersData = response.body?.data?.company?.orders;
+    const data = await shopifyGraphql(
+      client,
+      query,
+      { id: companyId, first: 100, after: cursor },
+      'company orders since assignment',
+    );
+    const ordersData = data?.company?.orders;
     if (!ordersData) break;
 
     for (const edge of ordersData.edges || []) {
@@ -888,17 +869,14 @@ app.get('/api/companies/:companyId/notes', validateAuthenticatedSession, async (
       }
     `;
 
-    const response = await client.query({
-      data: { query, variables: { id: companyId } },
-    });
-    throwIfGraphqlErrors(response, 'company notes');
+    const data = await shopifyGraphql(client, query, { id: companyId }, 'company notes');
 
-    if (!response.body?.data?.company) {
+    if (!data?.company) {
       return res.json({ notes: [] });
     }
 
     let notes = [];
-    const metafield = response.body?.data?.company?.metafield;
+    const metafield = data?.company?.metafield;
     if (metafield?.value) {
       try {
         notes = JSON.parse(metafield.value);
@@ -943,13 +921,10 @@ app.post('/api/companies/:companyId/notes', validateAuthenticatedSession, async 
       }
     `;
 
-    const getResponse = await client.query({
-      data: { query: getQuery, variables: { id: companyId } },
-    });
-    throwIfGraphqlErrors(getResponse, 'fetch company notes');
+    const getData = await shopifyGraphql(client, getQuery, { id: companyId }, 'fetch company notes');
 
     let notes = [];
-    const metafield = getResponse.body?.data?.company?.metafield;
+    const metafield = getData?.company?.metafield;
     if (metafield?.value) {
       try {
         notes = JSON.parse(metafield.value);
@@ -1002,13 +977,10 @@ app.delete('/api/companies/:companyId/notes/:noteId', validateAuthenticatedSessi
       }
     `;
 
-    const getResponse = await client.query({
-      data: { query: getQuery, variables: { id: companyId } },
-    });
-    throwIfGraphqlErrors(getResponse, 'fetch company notes');
+    const getData = await shopifyGraphql(client, getQuery, { id: companyId }, 'fetch company notes');
 
     let notes = [];
-    const metafield = getResponse.body?.data?.company?.metafield;
+    const metafield = getData?.company?.metafield;
     if (metafield?.value) {
       try {
         notes = JSON.parse(metafield.value);
@@ -1857,11 +1829,8 @@ app.get('/api/locations', validateAuthenticatedSession, async (req, res) => {
     let hasNextPage = true;
     let cursor = null;
     while (hasNextPage) {
-      const response = await client.query({
-        data: { query, variables: { first: 100, after: cursor } },
-      });
-      throwIfGraphqlErrors(response, 'metaobjects');
-      const moData = response.body?.data?.metaobjects;
+      const data = await shopifyGraphql(client, query, { first: 100, after: cursor }, 'metaobjects');
+      const moData = data?.metaobjects;
       if (!moData) {
         hasNextPage = false;
         break;
