@@ -16,6 +16,7 @@
             opacity: 0;
             pointer-events: none;
             transition: transform 0.3s ease, opacity 0.3s ease;
+            z-index: 60;
         }
         .toast.active {
             transform: translate(-50%, 0);
@@ -56,16 +57,15 @@
     </div>
 </nav>
 
-<!-- Status Toast -->
-<div id="status-toast" class="toast fixed bottom-6 left-1/2 bg-red-600 text-white px-6 py-3 rounded-lg shadow-xl z-50 flex items-center gap-2 max-w-[90vw] md:max-w-md w-full no-print" role="status" aria-live="polite">
-    <span class="material-symbols-outlined" data-toast-icon>error</span>
-    <p class="text-sm font-medium flex-1" data-toast-message></p>
-</div>
-
 <!-- Loading Overlay -->
 <div id="loading-overlay" class="loading-overlay fixed inset-0 bg-white/80 backdrop-blur-sm z-50 items-center justify-center flex-col gap-4 no-print">
     <div class="w-12 h-12 border-4 border-[#008060]/20 border-t-[#008060] rounded-full animate-spin"></div>
     <p class="text-[#008060] font-medium animate-pulse">Loading...</p>
+</div>
+
+<div id="status-toast" class="toast fixed bottom-6 left-1/2 bg-red-600 text-white px-6 py-3 rounded-lg shadow-xl flex items-center gap-2 max-w-[90vw] md:max-w-md w-full no-print" role="status" aria-live="polite">
+    <span class="material-symbols-outlined" data-toast-icon>error</span>
+    <p class="text-sm font-medium flex-1" data-toast-message></p>
 </div>
 
 <!-- Not a manager -->

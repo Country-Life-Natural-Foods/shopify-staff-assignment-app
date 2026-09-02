@@ -19,6 +19,7 @@
             opacity: 0;
             pointer-events: none;
             transition: transform 0.3s ease, opacity 0.3s ease;
+            z-index: 60;
         }
         .toast.active {
             transform: translate(-50%, 0);
@@ -91,16 +92,15 @@
     </div>
 </div>
 
-<!-- Status Toast -->
-<div id="status-toast" class="toast fixed bottom-20 md:bottom-6 left-1/2 bg-red-600 text-white px-6 py-3 rounded-lg shadow-xl z-50 flex items-center gap-2 max-w-[90vw] md:max-w-md w-full" role="status" aria-live="polite">
-    <span class="material-symbols-outlined" data-toast-icon>error</span>
-    <p class="text-sm font-medium flex-1" data-toast-message></p>
-</div>
-
 <!-- Loading Overlay -->
 <div id="loading-overlay" class="loading-overlay fixed inset-0 bg-white/80 backdrop-blur-sm z-50 items-center justify-center flex-col gap-4">
     <div class="w-12 h-12 border-4 border-[#008060]/20 border-t-[#008060] rounded-full animate-spin"></div>
     <p class="text-[#008060] font-medium animate-pulse">Loading...</p>
+</div>
+
+<div id="status-toast" class="toast fixed bottom-20 md:bottom-6 left-1/2 bg-red-600 text-white px-6 py-3 rounded-lg shadow-xl flex items-center gap-2 max-w-[90vw] md:max-w-md w-full" role="status" aria-live="polite">
+    <span class="material-symbols-outlined" data-toast-icon>error</span>
+    <p class="text-sm font-medium flex-1" data-toast-message></p>
 </div>
 
 <div class="flex h-[calc(100vh-120px)] overflow-hidden">
@@ -687,8 +687,8 @@
         renderCustomers();
     }
 
-    async function loadData() {
-        setLoading(true);
+    async function loadData(silent = false) {
+        if (!silent) setLoading(true);
         try {
             const [companiesRes, locationsRes] = await Promise.all([
                 window.shopifyApiFetch(apiUrl('/api/companies')),
@@ -722,11 +722,13 @@
             renderCustomers();
             renderSummary();
             if (map) updateMarkers();
+            return true;
         } catch (e) {
             console.error(e);
             showError(e.message);
+            return false;
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }
 
@@ -1479,8 +1481,12 @@
             if (!res.ok) throw new Error(data?.error || 'Sync failed');
             const incompleteNote = data.incomplete ? ' Partial run — click Run Map Sync again to continue.' : '';
             const skipNote = data.skipped ? `, skipped: ${data.skipped}` : '';
-            showToast(`Sync complete. Created: ${data.created || 0}, updated: ${data.updated || 0}${skipNote}.${incompleteNote}`, 'success');
-            await loadData();
+            // Reload first (button already says Syncing — don't put the blur
+            // overlay over a toast that has already started its hide timer).
+            const reloaded = await loadData(true);
+            if (reloaded) {
+                showToast(`Sync complete. Created: ${data.created || 0}, updated: ${data.updated || 0}${skipNote}.${incompleteNote}`, 'success');
+            }
         } catch (e) {
             showError('Sync failed: ' + e.message);
         } finally {
