@@ -752,7 +752,28 @@ const fetchAllCompanies = async (client, { mode = 'full' } = {}) => {
     const edges = companiesData.edges || [];
     const pageInfo = companiesData.pageInfo || { hasNextPage: false, endCursor: null };
 
-    all.push(...edges.map((edge) => enrichCompany(edge.node)));
+    // In commissions mode, skip expensive enrichment (notes, performance stats);
+    // we only need id, name, and assigned staff data for commission calculations
+    if (mode === 'commissions') {
+      all.push(...edges.map((edge) => {
+        const company = edge.node;
+        let assignedStaff = null;
+        try {
+          const assignedValue = company.assignedStaffMetafield?.value;
+          if (assignedValue) {
+            assignedStaff = JSON.parse(assignedValue);
+            if (assignedStaff && !assignedStaff.assignedAt) {
+              assignedStaff.assignedAt = company.assignedStaffMetafield?.updatedAt || null;
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to parse assigned staff for company', company.id, e.message);
+        }
+        return { id: company.id, name: company.name, assignedStaff };
+      }));
+    } else {
+      all.push(...edges.map((edge) => enrichCompany(edge.node)));
+    }
 
     hasNextPage = Boolean(pageInfo.hasNextPage);
     cursor = pageInfo.endCursor || null;
