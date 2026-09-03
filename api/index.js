@@ -2117,6 +2117,477 @@ app.post('/api/sync-b2b-map', validateAuthenticatedSession, async (req, res) => 
   }
 });
 
+// ============================================================================
+// ANALYTICS ENDPOINTS
+// ============================================================================
+
+const {
+  buildAnalyticsSummary,
+  getCompaniesAnalytics,
+  getCompanyAnalytics,
+  getProductsAnalytics,
+  getRevenueTrend,
+} = require('../lib/analytics-data');
+
+/**
+ * Validate query parameter as a positive integer
+ * @param {string} value - Query parameter value
+ * @param {number} defaultValue - Default value if not provided or invalid
+ * @param {number} maxValue - Maximum allowed value
+ * @returns {number} Validated integer value
+ */
+function validatePositiveInt(value, defaultValue = 10, maxValue = 100) {
+  if (!value) return defaultValue;
+  const num = parseInt(value, 10);
+  if (Number.isNaN(num) || num < 1) return defaultValue;
+  if (maxValue && num > maxValue) return maxValue;
+  return num;
+}
+
+/**
+ * Validate sorting parameter
+ * @param {string} value - Sort parameter value
+ * @param {Array} validOptions - Valid sort options
+ * @param {string} defaultValue - Default value
+ * @returns {string} Validated sort value
+ */
+function validateSortParam(value, validOptions = [], defaultValue = 'revenue') {
+  if (!value || !validOptions.includes(value)) return defaultValue;
+  return value;
+}
+
+/**
+ * Validate sort order (asc/desc)
+ * @param {string} value - Sort order value
+ * @returns {string} 'asc' or 'desc'
+ */
+function validateSortOrder(value) {
+  return value === 'asc' ? 'asc' : 'desc';
+}
+
+/**
+ * Validate period parameter for trend analysis
+ * @param {string} value - Period value
+ * @returns {string} Valid period
+ */
+function validatePeriod(value) {
+  const validPeriods = ['daily', 'weekly', 'monthly'];
+  if (validPeriods.includes(value)) return value;
+  return 'daily';
+}
+
+/**
+ * Validate product status parameter
+ * @param {string} value - Status value
+ * @returns {string} Valid status
+ */
+function validateProductStatus(value) {
+  const validStatuses = ['ACTIVE', 'ARCHIVED', 'DRAFT', 'ALL'];
+  if (validStatuses.includes(value)) return value;
+  return 'ACTIVE';
+}
+
+/**
+ * Validate ISO 8601 date string
+ * @param {string} value - Date value to validate
+ * @returns {string|null} ISO 8601 date string or null if invalid
+ */
+function validateISODate(value) {
+  if (!value) return null;
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    // Verify it's a valid ISO format
+    const isoString = date.toISOString();
+    return isoString;
+  } catch {
+    return null;
+  }
+}
+
+// GET /analytics - Serve analytics HTML page
+/**
+ * GET /analytics
+ * Serves the analytics dashboard HTML page
+ *
+ * @route GET /analytics
+ * @returns {html} Analytics dashboard HTML
+ * @throws {500} Internal server error
+ */
+app.get('/analytics', ensureInstalledOnShop, shopifyCspHeaders, (req, res) => {
+  try {
+    sendAppHtmlFile(res, 'analytics.html');
+  } catch (error) {
+    console.error('Error loading analytics page:', error);
+    res.status(500).send('Internal server error');
+  }
+});
+
+// GET /api/analytics/summary - Overall analytics summary
+/**
+ * GET /api/analytics/summary
+ * Returns overall analytics summary including revenue, order counts, and trends
+ *
+ * @route GET /api/analytics/summary
+ * @returns {Object} {
+ *   summary: Object with totalRevenue, totalOrders, activeCompanies, etc.
+ *   trend: Array of daily revenue trends
+ *   generatedAt: ISO timestamp
+ *   truncated: Object with boolean flags indicating if results were paginated
+ * }
+ * @throws {401} Unauthorized
+ * @throws {502} Shopify API error
+ * @throws {503} Request timeout
+ * @throws {500} Internal server error
+ */
+app.get('/api/analytics/summary', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    // Extract and validate date range parameters
+    const startDate = validateISODate(req.query.startDate);
+    const endDate = validateISODate(req.query.endDate);
+
+    // Validate date range order if both provided
+    if (startDate && endDate && new Date(startDate) > new Date(endDate)) {
+      return res.status(400).json({ error: 'startDate must be before or equal to endDate' });
+    }
+
+    const result = await buildAnalyticsSummary(client, startDate, endDate);
+    res.json(result);
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/analytics/summary', error);
+    res.status(500).json({ error: error.message, code: 'ANALYTICS_SUMMARY_ERROR' });
+  }
+});
+
+// GET /api/analytics/revenue-trend - Revenue trend analysis
+/**
+ * GET /api/analytics/revenue-trend
+ * Returns revenue trend data grouped by specified period (daily, weekly, monthly)
+ *
+ * @route GET /api/analytics/revenue-trend
+ * @query {string} period - 'daily' (default), 'weekly', or 'monthly'
+ * @query {number} maxPages - Maximum pages to fetch (1-10, default 10)
+ * @returns {Object} {
+ *   trends: Array of {date, revenue, orders}
+ *   totalRevenue: Total revenue across period
+ *   currency: Currency code
+ *   period: Period grouping used
+ *   truncated: Boolean indicating if results were paginated
+ *   generatedAt: ISO timestamp
+ * }
+ * @throws {400} Invalid query parameters
+ * @throws {401} Unauthorized
+ * @throws {502} Shopify API error
+ * @throws {503} Request timeout
+ * @throws {500} Internal server error
+ */
+app.get('/api/analytics/revenue-trend', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const period = validatePeriod(req.query.period);
+    const maxPages = validatePositiveInt(req.query.maxPages, 10, 15);
+
+    // Extract and validate date range parameters
+    const startDate = validateISODate(req.query.startDate);
+    const endDate = validateISODate(req.query.endDate);
+
+    // Validate date range order if both provided
+    if (startDate && endDate && new Date(startDate) > new Date(endDate)) {
+      return res.status(400).json({ error: 'startDate must be before or equal to endDate' });
+    }
+
+    const result = await getRevenueTrend(client, { period, maxPages, startDate, endDate });
+    res.json(result);
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/analytics/revenue-trend', error);
+    res.status(500).json({ error: error.message, code: 'REVENUE_TREND_ERROR' });
+  }
+});
+
+// GET /api/analytics/companies - List all companies with analytics
+/**
+ * GET /api/analytics/companies
+ * Returns list of all companies with analytics data
+ *
+ * @route GET /api/analytics/companies
+ * @query {string} sortBy - 'revenue' (default), 'name', 'createdAt'
+ * @query {string} sortOrder - 'desc' (default) or 'asc'
+ * @query {number} maxPages - Maximum pages to fetch (1-10, default 10)
+ * @returns {Object} {
+ *   companies: Array of company analytics objects
+ *   totalCount: Total companies returned
+ *   truncated: Boolean indicating if results were paginated
+ *   generatedAt: ISO timestamp
+ * }
+ * @throws {400} Invalid query parameters
+ * @throws {401} Unauthorized
+ * @throws {502} Shopify API error
+ * @throws {503} Request timeout
+ * @throws {500} Internal server error
+ */
+app.get('/api/analytics/companies', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const sortBy = validateSortParam(req.query.sortBy, ['revenue', 'name', 'createdAt'], 'revenue');
+    const sortOrder = validateSortOrder(req.query.sortOrder);
+    const maxPages = validatePositiveInt(req.query.maxPages, 10, 15);
+
+    // Extract and validate date range parameters
+    const startDate = validateISODate(req.query.startDate);
+    const endDate = validateISODate(req.query.endDate);
+
+    // Validate date range order if both provided
+    if (startDate && endDate && new Date(startDate) > new Date(endDate)) {
+      return res.status(400).json({ error: 'startDate must be before or equal to endDate' });
+    }
+
+    const result = await getCompaniesAnalytics(client, { sortBy, sortOrder, maxPages, startDate, endDate });
+    res.json(result);
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/analytics/companies', error);
+    res.status(500).json({ error: error.message, code: 'COMPANIES_ANALYTICS_ERROR' });
+  }
+});
+
+// GET /api/analytics/companies/:companyId - Company-specific analytics
+/**
+ * GET /api/analytics/companies/:companyId
+ * Returns detailed analytics for a specific company
+ *
+ * @route GET /api/analytics/companies/:companyId
+ * @param {string} companyId - Shopify company ID
+ * @returns {Object} {
+ *   id: Company ID
+ *   name: Company name
+ *   totalSpent: Total revenue from company
+ *   ordersCount: Number of orders
+ *   lastOrderDate: ISO timestamp of last order
+ *   daysSinceLastOrder: Number of days since last order
+ *   avgOrderValue: Average order value
+ *   currency: Currency code
+ *   contactCount: Number of contacts
+ *   orderTrend: Array of daily order trends
+ *   generatedAt: ISO timestamp
+ * }
+ * @throws {400} Invalid company ID format
+ * @throws {401} Unauthorized
+ * @throws {404} Company not found
+ * @throws {502} Shopify API error
+ * @throws {503} Request timeout
+ * @throws {500} Internal server error
+ */
+app.get('/api/analytics/companies/:companyId', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const companyId = decodeRouteParam(req.params.companyId);
+    if (!validators.id(companyId)) {
+      return res.status(400).json({ error: 'Invalid company ID format' });
+    }
+
+    // Extract and validate date range parameters (for consistency, though not yet used by getCompanyAnalytics)
+    const startDate = validateISODate(req.query.startDate);
+    const endDate = validateISODate(req.query.endDate);
+
+    // Validate date range order if both provided
+    if (startDate && endDate && new Date(startDate) > new Date(endDate)) {
+      return res.status(400).json({ error: 'startDate must be before or equal to endDate' });
+    }
+
+    const result = await getCompanyAnalytics(client, companyId);
+    if (!result) {
+      return res.status(404).json({ error: 'Company not found', code: 'COMPANY_NOT_FOUND' });
+    }
+
+    res.json(result);
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/analytics/companies/:companyId', error);
+    res.status(500).json({ error: error.message, code: 'COMPANY_ANALYTICS_ERROR' });
+  }
+});
+
+// GET /api/analytics/products - Product analytics
+/**
+ * GET /api/analytics/products
+ * Returns analytics data for products
+ *
+ * @route GET /api/analytics/products
+ * @query {string} status - 'ACTIVE' (default), 'ARCHIVED', 'DRAFT', 'ALL'
+ * @query {number} maxPages - Maximum pages to fetch (1-10, default 10)
+ * @returns {Object} {
+ *   products: Array of product analytics objects
+ *   totalCount: Total products returned
+ *   truncated: Boolean indicating if results were paginated
+ *   generatedAt: ISO timestamp
+ * }
+ * @throws {400} Invalid query parameters
+ * @throws {401} Unauthorized
+ * @throws {502} Shopify API error
+ * @throws {503} Request timeout
+ * @throws {500} Internal server error
+ */
+app.get('/api/analytics/products', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const status = validateProductStatus(req.query.status);
+    const maxPages = validatePositiveInt(req.query.maxPages, 10, 15);
+
+    // Extract and validate date range parameters (for consistency, though not yet used by getProductsAnalytics)
+    const startDate = validateISODate(req.query.startDate);
+    const endDate = validateISODate(req.query.endDate);
+
+    // Validate date range order if both provided
+    if (startDate && endDate && new Date(startDate) > new Date(endDate)) {
+      return res.status(400).json({ error: 'startDate must be before or equal to endDate' });
+    }
+
+    const result = await getProductsAnalytics(client, { status, maxPages });
+    res.json(result);
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/analytics/products', error);
+    res.status(500).json({ error: error.message, code: 'PRODUCTS_ANALYTICS_ERROR' });
+  }
+});
+
+// GET /api/analytics/export - Export analytics data as CSV/JSON
+/**
+ * GET /api/analytics/export
+ * Exports analytics data in requested format (JSON or CSV)
+ *
+ * @route GET /api/analytics/export
+ * @query {string} format - 'json' (default) or 'csv'
+ * @query {string} dataType - 'companies' (default), 'products', 'summary'
+ * @query {string} accept - Deprecated; use format parameter instead
+ * @returns {Object|string} Formatted analytics export
+ * @throws {400} Invalid format or dataType
+ * @throws {401} Unauthorized
+ * @throws {502} Shopify API error
+ * @throws {503} Request timeout
+ * @throws {500} Internal server error
+ */
+app.get('/api/analytics/export', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+
+    const format = (req.query.format || 'json').toLowerCase();
+    const dataType = (req.query.dataType || 'companies').toLowerCase();
+
+    if (!['json', 'csv'].includes(format)) {
+      return res.status(400).json({ error: 'Invalid format. Use "json" or "csv".' });
+    }
+
+    if (!['companies', 'products', 'summary'].includes(dataType)) {
+      return res.status(400).json({ error: 'Invalid dataType. Use "companies", "products", or "summary".' });
+    }
+
+    // Extract and validate date range parameters
+    const startDate = validateISODate(req.query.startDate);
+    const endDate = validateISODate(req.query.endDate);
+
+    // Validate date range order if both provided
+    if (startDate && endDate && new Date(startDate) > new Date(endDate)) {
+      return res.status(400).json({ error: 'startDate must be before or equal to endDate' });
+    }
+
+    let data;
+
+    if (dataType === 'companies') {
+      data = await getCompaniesAnalytics(client, { maxPages: 20, startDate, endDate });
+    } else if (dataType === 'products') {
+      data = await getProductsAnalytics(client, { maxPages: 20 });
+    } else {
+      data = await buildAnalyticsSummary(client, startDate, endDate);
+    }
+
+    if (format === 'csv') {
+      let csv = '';
+
+      if (dataType === 'companies') {
+        csv = [
+          ['Company Name', 'External ID', 'Total Spent', 'Orders', 'Avg Order Value', 'Last Order Date', 'Days Since Last Order', 'Contacts', 'Currency'],
+          ...data.companies.map(c => [
+            c.name,
+            c.externalId || '',
+            c.totalSpent,
+            c.ordersCount,
+            c.avgOrderValue,
+            c.lastOrderDate || '',
+            c.daysSinceLastOrder !== null ? c.daysSinceLastOrder : '',
+            c.contactCount,
+            c.currency,
+          ]),
+        ].map(row => row.map(csvField).join(',')).join('\r\n');
+      } else if (dataType === 'products') {
+        csv = [
+          ['Product Title', 'SKU Count', 'Status', 'Total Inventory', 'Created At', 'Updated At'],
+          ...data.products.map(p => [
+            p.title,
+            p.variantSkus.length,
+            p.status,
+            p.totalInventory,
+            p.createdAt,
+            p.updatedAt,
+          ]),
+        ].map(row => row.map(csvField).join(',')).join('\r\n');
+      } else {
+        csv = [
+          ['Metric', 'Value'],
+          ['Total Revenue', data.summary.revenue],
+          ['Total Orders', data.summary.orders],
+          ['Active Companies', data.summary.activeCompanies],
+          ['Total Companies', data.summary.totalCompanies],
+          ['Avg Order Value', data.summary.avgOrderValue],
+          ['Currency', data.summary.currencyCode],
+        ].map(row => row.map(csvField).join(',')).join('\r\n');
+      }
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="analytics-${dataType}-${new Date().toISOString().split('T')[0]}.csv"`);
+      res.send(csv);
+    } else {
+      // JSON format
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="analytics-${dataType}-${new Date().toISOString().split('T')[0]}.json"`);
+      res.json(data);
+    }
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/analytics/export', error);
+    res.status(500).json({ error: error.message, code: 'ANALYTICS_EXPORT_ERROR' });
+  }
+});
+
+// END ANALYTICS ENDPOINTS
+// ============================================================================
+
 app.use(express.static(publicDir, { index: false }));
 
 if (require.main === module) {
