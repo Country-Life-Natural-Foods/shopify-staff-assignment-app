@@ -960,10 +960,35 @@ const fetchCompanyRevenueSince = async (client, companyId, sinceIso, untilIso = 
   return { totalSpend, orderCount, lastOrderDate };
 };
 
-async function fetchCompaniesRevenueSince(client, jobs) {
-  return mapWithConcurrency(jobs, COMMISSION_SHOPIFY_CONCURRENCY, (job) =>
-    fetchCompanyRevenueSince(client, job.companyId, job.sinceIso, job.untilIso || null),
-  );
+async function fetchCompaniesRevenueSince(client, jobs, onProgress) {
+  let completed = 0;
+  return mapWithConcurrency(jobs, COMMISSION_SHOPIFY_CONCURRENCY, async (job) => {
+    const result = await fetchCompanyRevenueSince(
+      client,
+      job.companyId,
+      job.sinceIso,
+      job.untilIso || null,
+    );
+    completed += 1;
+    if (typeof onProgress === 'function') {
+      onProgress({ done: completed, total: jobs.length });
+    }
+    return result;
+  });
+}
+
+function wantsNdjson(req) {
+  return String(req.headers.accept || '').includes('application/x-ndjson');
+}
+
+function writeNdjson(res, obj) {
+  if (!res.headersSent) {
+    res.status(200);
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Accel-Buffering', 'no');
+  }
+  res.write(`${JSON.stringify(obj)}\n`);
 }
 
 // API Endpoints
@@ -1558,7 +1583,7 @@ function resolveReportMonth(monthParam) {
 // manager-only, finance-facing view of everyone's pay, so — same as
 // Commissions — the viewer (manager included) must have verified their own
 // 4-digit code this session before any figures come back.
-async function buildCommissionReport(req, res, monthParam) {
+async function buildCommissionReport(req, res, monthParam, onProgress) {
   const user = await getCurrentUser(req, res);
   const isUserManager = await isManager(user);
   if (!isUserManager) {
@@ -1582,7 +1607,13 @@ async function buildCommissionReport(req, res, monthParam) {
   if (!client) return { status: 401, error: 'Unauthorized' };
 
   const period = resolveReportMonth(monthParam);
+  if (typeof onProgress === 'function') {
+    onProgress({ phase: 'companies', done: 0, total: 1, label: 'Loading companies' });
+  }
   const companies = await fetchAllCompanies(client, { mode: 'commissions' });
+  if (typeof onProgress === 'function') {
+    onProgress({ phase: 'companies', done: 1, total: 1, label: 'Loading companies' });
+  }
   const allStaff = await staffStore.list();
 
   // Every staff member gets an entry — including reps with $0 this period —
@@ -1620,6 +1651,14 @@ async function buildCommissionReport(req, res, monthParam) {
     });
   }
 
+  if (typeof onProgress === 'function') {
+    onProgress({
+      phase: 'revenue',
+      done: 0,
+      total: reportJobs.length,
+      label: 'Calculating commissions',
+    });
+  }
   const revenues = await fetchCompaniesRevenueSince(
     client,
     reportJobs.map((job) => ({
@@ -1627,6 +1666,9 @@ async function buildCommissionReport(req, res, monthParam) {
       sinceIso: job.sinceIso,
       untilIso: job.untilIso,
     })),
+    typeof onProgress === 'function'
+      ? (p) => onProgress({ phase: 'revenue', label: 'Calculating commissions', ...p })
+      : undefined,
   );
 
   reportJobs.forEach((job, i) => {
@@ -1670,13 +1712,29 @@ async function buildCommissionReport(req, res, monthParam) {
 
 app.get('/api/reports/commissions', validateAuthenticatedSession, async (req, res) => {
   try {
-    const report = await buildCommissionReport(req, res, req.query.month);
+    const stream = wantsNdjson(req);
+    const onProgress = stream
+      ? (p) => writeNdjson(res, { type: 'progress', ...p })
+      : undefined;
+    const report = await buildCommissionReport(req, res, req.query.month, onProgress);
     if (report.status !== 200) {
+      if (res.headersSent) {
+        writeNdjson(res, { type: 'error', error: report.error, code: report.code });
+        return res.end();
+      }
       return res.status(report.status).json({ error: report.error, code: report.code });
     }
     const { status, ...body } = report;
+    if (stream) {
+      writeNdjson(res, { type: 'result', ...body });
+      return res.end();
+    }
     res.json(body);
   } catch (error) {
+    if (res.headersSent) {
+      writeNdjson(res, { type: 'error', error: error.message });
+      return res.end();
+    }
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
       return sendShopifyApiError(res, error);
     }
@@ -1770,17 +1828,28 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
       });
     }
 
+    const stream = wantsNdjson(req);
+    const onProgress = stream
+      ? (p) => writeNdjson(res, { type: 'progress', ...p })
+      : undefined;
+
     // Check cache for manager data (reps only see their own, no cache needed)
     const shopId = res.locals.shopify?.session?.shop || 'unknown';
     if (isUserManager) {
       const cached = commissionCache.get(shopId, 'all');
       if (cached) {
+        if (stream) {
+          writeNdjson(res, { type: 'result', ...cached });
+          return res.end();
+        }
         return res.json(cached);
       }
     }
 
     // Fetch all companies with their app-owned rep assignment and revenue
+    if (onProgress) onProgress({ phase: 'companies', done: 0, total: 1, label: 'Loading companies' });
     const companies = await fetchAllCompanies(client, { mode: 'commissions' });
+    if (onProgress) onProgress({ phase: 'companies', done: 1, total: 1, label: 'Loading companies' });
     const allStaff = await staffStore.list();
     const staffById = new Map(allStaff.map((s) => [s.id, s]));
 
@@ -1794,12 +1863,23 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
       commissionJobs.push({ company, assigned, staffRecord });
     }
 
+    if (onProgress) {
+      onProgress({
+        phase: 'revenue',
+        done: 0,
+        total: commissionJobs.length,
+        label: 'Calculating commissions',
+      });
+    }
     const revenues = await fetchCompaniesRevenueSince(
       client,
       commissionJobs.map((job) => ({
         companyId: job.company.id,
         sinceIso: job.assigned.assignedAt,
       })),
+      onProgress
+        ? (p) => onProgress({ phase: 'revenue', label: 'Calculating commissions', ...p })
+        : undefined,
     );
 
     const commissionsMap = {};
@@ -1842,7 +1922,7 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
     // Sort by total commission descending
     commissions.sort((a, b) => b.totalCommission - a.totalCommission);
 
-    const response = {
+    const payload = {
       commissions,
       isManager: isUserManager,
       generatedAt: new Date().toISOString()
@@ -1850,11 +1930,19 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
 
     // Cache manager data for 5 minutes (reps see personal data, less cacheable)
     if (isUserManager && shopId !== 'unknown') {
-      commissionCache.set(shopId, 'all', response);
+      commissionCache.set(shopId, 'all', payload);
     }
 
-    res.json(response);
+    if (stream) {
+      writeNdjson(res, { type: 'result', ...payload });
+      return res.end();
+    }
+    res.json(payload);
   } catch (error) {
+    if (res.headersSent) {
+      writeNdjson(res, { type: 'error', error: error.message });
+      return res.end();
+    }
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
       return sendShopifyApiError(res, error);
     }

@@ -9,8 +9,6 @@
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #f6faff; }
-        .loading-overlay { display: none; }
-        .loading-overlay.active { display: flex; }
         .toast {
             transform: translate(-50%, calc(100% + 1.5rem));
             opacity: 0;
@@ -56,12 +54,6 @@
         </button>
     </div>
 </nav>
-
-<!-- Loading Overlay -->
-<div id="loading-overlay" class="loading-overlay fixed inset-0 bg-white/80 backdrop-blur-sm z-50 items-center justify-center flex-col gap-4 no-print">
-    <div class="w-12 h-12 border-4 border-[#008060]/20 border-t-[#008060] rounded-full animate-spin"></div>
-    <p class="text-[#008060] font-medium animate-pulse">Loading...</p>
-</div>
 
 <div id="status-toast" class="toast fixed bottom-6 left-1/2 bg-red-600 text-white px-6 py-3 rounded-lg shadow-xl flex items-center gap-2 max-w-[90vw] md:max-w-md w-full no-print" role="status" aria-live="polite">
     <span class="material-symbols-outlined" data-toast-icon>error</span>
@@ -123,6 +115,7 @@
 </div>
 
 <script type="module" src="/shopify-session-bootstrap.js"></script>
+<script src="/page-progress.js"></script>
 <script>
     let toastHideTimer = null;
     let pinGateMode = null; // 'set' | 'verify'
@@ -142,8 +135,9 @@
     document.getElementById('back-link').href = apiUrl('/');
     document.getElementById('pin-gate-back').href = apiUrl('/');
 
-    function setLoading(active) {
-        document.getElementById('loading-overlay').classList.toggle('active', active);
+    function setLoading(active, label = 'Loading') {
+        if (active) window.pageProgress.begin({ total: 1, label });
+        else window.pageProgress.finish();
     }
 
     function showToast(msg, type = 'error') {
@@ -231,11 +225,15 @@
 
     async function loadReport() {
         const month = document.getElementById('report-month').value;
-        setLoading(true);
+        window.pageProgress.begin({ total: 100, label: 'Loading report' });
         try {
-            const res = await window.shopifyApiFetch(apiUrl(`/api/reports/commissions?month=${month}`));
+            const { res, data } = await window.fetchJsonWithProgress(
+                apiUrl(`/api/reports/commissions?month=${month}`),
+                {},
+                window.applyWorkProgress,
+            );
             if (res.status === 403) {
-                const data = await res.json().catch(() => ({}));
+                window.pageProgress.fail();
                 if (data.code === 'PIN_REQUIRED' || data.code === 'PIN_NOT_SET') {
                     openPinGateModal(data.code === 'PIN_NOT_SET' ? 'set' : 'verify');
                     return;
@@ -244,21 +242,20 @@
                 document.getElementById('not-manager-view').classList.remove('hidden');
                 return;
             }
-            if (!res.ok) throw new Error(await readApiError(res, 'Failed to load report'));
-            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Failed to load report');
             document.getElementById('not-manager-view').classList.add('hidden');
             document.getElementById('report-root').classList.remove('hidden');
             renderReport(data);
+            window.pageProgress.finish();
         } catch (e) {
+            window.pageProgress.fail();
             showError(e.message);
-        } finally {
-            setLoading(false);
         }
     }
 
     async function downloadCsv() {
         const month = document.getElementById('report-month').value;
-        setLoading(true);
+        setLoading(true, 'Exporting CSV');
         try {
             const res = await window.shopifyApiFetch(apiUrl(`/api/reports/commissions/export.csv?month=${month}`));
             if (!res.ok) throw new Error(await readApiError(res, 'Failed to export CSV'));
@@ -306,7 +303,7 @@
         }
 
         const endpoint = pinGateMode === 'set' ? '/api/commissions/pin/set' : '/api/commissions/pin/verify';
-        setLoading(true);
+        setLoading(true, 'Checking code');
         try {
             const res = await window.shopifyApiFetch(apiUrl(endpoint), {
                 method: 'POST',
@@ -315,17 +312,17 @@
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
+                window.pageProgress.fail();
                 errorEl.textContent = data.error || 'Something went wrong.';
                 errorEl.classList.remove('hidden');
                 return;
             }
             closePinGateModal();
-            loadReport();
+            await loadReport();
         } catch (e) {
+            window.pageProgress.fail();
             errorEl.textContent = e.message;
             errorEl.classList.remove('hidden');
-        } finally {
-            setLoading(false);
         }
     }
 
