@@ -92,6 +92,42 @@ class CommissionCache {
 
 const commissionCache = new CommissionCache();
 
+// Input validation helpers to prevent common attacks and data issues
+const validators = {
+  email: (value) => {
+    if (typeof value !== 'string') return false;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 255;
+  },
+
+  string: (value, minLen = 1, maxLen = 1000) => {
+    if (typeof value !== 'string') return false;
+    return value.length >= minLen && value.length <= maxLen;
+  },
+
+  number: (value, min = -Infinity, max = Infinity) => {
+    const num = Number(value);
+    return !isNaN(num) && num >= min && num <= max;
+  },
+
+  id: (value) => {
+    if (typeof value !== 'string') return false;
+    return /^[a-zA-Z0-9_\-:.]+$/.test(value) && value.length <= 255;
+  },
+
+  pin: (value) => {
+    return /^\d{4}$/.test(String(value || ''));
+  },
+
+  role: (value) => {
+    return ['manager', 'rep'].includes(value);
+  },
+
+  commissionTier: (value) => {
+    const num = Number(value);
+    return !isNaN(num) && num >= 0 && num <= 100;
+  },
+};
+
 function formatShopifyClientError(err) {
   if (err instanceof GraphqlQueryError) {
     const gqlErrs = err.body?.errors?.graphQLErrors;
@@ -1111,19 +1147,13 @@ app.post('/api/staff', validateAuthenticatedSession, async (req, res) => {
     }
 
     const { name, email, commissionTier, role, pin } = req.body;
-    if (!name || !email || commissionTier === undefined || !role) {
-      return res.status(400).json({ error: 'name, email, commissionTier, and role required' });
+
+    if (!validators.string(name, 1, 255) || !validators.email(email) ||
+        !validators.commissionTier(commissionTier) || !validators.role(role)) {
+      return res.status(400).json({ error: 'Invalid input: check name, email, commissionTier (0-100), and role (manager/rep)' });
     }
 
-    if (!['manager', 'rep'].includes(role)) {
-      return res.status(400).json({ error: 'role must be "manager" or "rep"' });
-    }
-
-    if (commissionTier < 0 || commissionTier > 100) {
-      return res.status(400).json({ error: 'commissionTier must be between 0 and 100' });
-    }
-
-    if (pin !== undefined && pin !== null && pin !== '' && !/^\d{4}$/.test(String(pin))) {
+    if (pin !== undefined && pin !== null && pin !== '' && !validators.pin(pin)) {
       return res.status(400).json({ error: 'Starter code must be exactly 4 digits.' });
     }
 
@@ -1355,7 +1385,7 @@ app.post('/api/commissions/pin/set', validateAuthenticatedSession, async (req, r
     }
 
     const pin = String(req.body?.pin || '');
-    if (!/^\d{4}$/.test(pin)) {
+    if (!validators.pin(pin)) {
       return res.status(400).json({ error: 'Code must be exactly 4 digits.' });
     }
 
@@ -1390,6 +1420,10 @@ app.post('/api/commissions/pin/verify', validateAuthenticatedSession, async (req
     }
 
     const pin = String(req.body?.pin || '');
+    if (!validators.pin(pin)) {
+      return res.status(400).json({ error: 'Invalid code format.' });
+    }
+
     const ok = await verifyPinHash(pin, pinInfo?.pinHash);
     const attempts = await staffStore.recordPinAttempt(ownStaff.id, ok);
 
