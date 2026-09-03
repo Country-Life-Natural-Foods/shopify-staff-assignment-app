@@ -29,10 +29,12 @@
     }
     #${ROOT_ID} .page-progress-label {
       display: none;
+      align-items: center;
+      gap: 6px;
       margin: 6px auto 0;
       width: max-content;
       max-width: min(92vw, 28rem);
-      padding: 3px 10px;
+      padding: 3px 10px 3px 8px;
       border-radius: 999px;
       background: #008060;
       color: #fff;
@@ -42,7 +44,19 @@
       line-height: 1.3;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
     }
-    #${ROOT_ID}.is-active .page-progress-label { display: block; }
+    #${ROOT_ID}.is-active .page-progress-label { display: inline-flex; }
+    #${ROOT_ID} .page-progress-spinner {
+      width: 10px;
+      height: 10px;
+      flex-shrink: 0;
+      border: 1.5px solid rgba(255, 255, 255, 0.35);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: page-progress-spin 0.7s linear infinite;
+    }
+    @keyframes page-progress-spin {
+      to { transform: rotate(360deg); }
+    }
     @media print {
       #${ROOT_ID} { display: none !important; }
     }
@@ -67,7 +81,10 @@
       '<div class="page-progress-track">' +
         '<div class="page-progress-fill" data-progress-fill role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Page loading"></div>' +
       '</div>' +
-      '<p class="page-progress-label" data-progress-label></p>';
+      '<div class="page-progress-label">' +
+        '<span class="page-progress-spinner" aria-hidden="true"></span>' +
+        '<span data-progress-label></span>' +
+      '</div>';
     document.body.prepend(root);
   }
 
