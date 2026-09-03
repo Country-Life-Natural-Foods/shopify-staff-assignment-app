@@ -44,6 +44,90 @@ const { shopifyGraphql } = require('../lib/shopify-gql');
 
 applyShopifyDeploymentEnv();
 
+// Simple in-memory cache with TTL for commission data
+// Stores expensive query results (commission calculations) for 5 minutes
+class CommissionCache {
+  constructor(ttlMs = 5 * 60 * 1000) {
+    this.cache = new Map();
+    this.ttlMs = ttlMs;
+  }
+
+  makeKey(shopId, staffId) {
+    return `commission:${shopId}:${staffId}`;
+  }
+
+  get(shopId, staffId) {
+    const key = this.makeKey(shopId, staffId);
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.cache.delete(key);
+      return null;
+    }
+    return entry.data;
+  }
+
+  set(shopId, staffId, data) {
+    const key = this.makeKey(shopId, staffId);
+    this.cache.set(key, {
+      data,
+      expiresAt: Date.now() + this.ttlMs,
+    });
+  }
+
+  clear(shopId, staffId) {
+    if (staffId) {
+      this.cache.delete(this.makeKey(shopId, staffId));
+    } else {
+      // Clear all for a shop
+      const prefix = `commission:${shopId}:`;
+      for (const key of this.cache.keys()) {
+        if (key.startsWith(prefix)) {
+          this.cache.delete(key);
+        }
+      }
+    }
+  }
+}
+
+const commissionCache = new CommissionCache();
+
+// Input validation helpers to prevent common attacks and data issues
+const validators = {
+  email: (value) => {
+    if (typeof value !== 'string') return false;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 255;
+  },
+
+  string: (value, minLen = 1, maxLen = 1000) => {
+    if (typeof value !== 'string') return false;
+    return value.length >= minLen && value.length <= maxLen;
+  },
+
+  number: (value, min = -Infinity, max = Infinity) => {
+    const num = Number(value);
+    return !isNaN(num) && num >= min && num <= max;
+  },
+
+  id: (value) => {
+    if (typeof value !== 'string') return false;
+    return /^[a-zA-Z0-9_\-:.]+$/.test(value) && value.length <= 255;
+  },
+
+  pin: (value) => {
+    return /^\d{4}$/.test(String(value || ''));
+  },
+
+  role: (value) => {
+    return ['manager', 'rep'].includes(value);
+  },
+
+  commissionTier: (value) => {
+    const num = Number(value);
+    return !isNaN(num) && num >= 0 && num <= 100;
+  },
+};
+
 function formatShopifyClientError(err) {
   if (err instanceof GraphqlQueryError) {
     const gqlErrs = err.body?.errors?.graphQLErrors;
@@ -121,6 +205,26 @@ app.use(cookieParser());
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Request logging middleware for debugging and monitoring
+app.use((req, res, next) => {
+  const start = Date.now();
+  const originalSend = res.send;
+
+  res.send = function(data) {
+    const duration = Date.now() - start;
+    const statusCode = res.statusCode;
+    const method = req.method;
+    const path = req.path;
+    const query = Object.keys(req.query).length ? `?${new URLSearchParams(req.query)}` : '';
+    const level = statusCode >= 500 ? 'error' : statusCode >= 400 ? 'warn' : 'info';
+    console.log(`[${level}] ${method} ${path}${query} ${statusCode} ${duration}ms`);
+    res.send = originalSend;
+    return originalSend.call(this, data);
+  };
+
+  next();
+});
 
 // Fail fast instead of hanging for the full Vercel maxDuration (300s).
 // Production logs showed the embedded app's "/" route stall for the entire
@@ -374,22 +478,28 @@ const isManager = async (user) => {
 // verification, so a PIN tied to the staff record (not the Shopify login)
 // is what actually keeps someone from seeing another rep's numbers.
 const PIN_MAX_ATTEMPTS = 5;
+const { promisify } = require('util');
+const scryptAsync = promisify(crypto.scrypt);
 
-function hashPin(pin) {
+async function hashPin(pin) {
   const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(pin, salt, 64).toString('hex');
-  return `${salt}:${hash}`;
+  const hash = await scryptAsync(pin, salt, 64);
+  return `${salt}:${hash.toString('hex')}`;
 }
 
-function verifyPinHash(pin, stored) {
+async function verifyPinHash(pin, stored) {
   if (!stored) return false;
   const [salt, hash] = stored.split(':');
   if (!salt || !hash) return false;
-  const candidate = crypto.scryptSync(pin, salt, 64).toString('hex');
-  const a = Buffer.from(hash, 'hex');
-  const b = Buffer.from(candidate, 'hex');
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+  try {
+    const candidate = await scryptAsync(pin, salt, 64);
+    const a = Buffer.from(hash, 'hex');
+    const b = candidate;
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
 }
 
 const getGraphqlClient = async (req, res) => {
@@ -746,7 +856,28 @@ const fetchAllCompanies = async (client, { mode = 'full' } = {}) => {
     const edges = companiesData.edges || [];
     const pageInfo = companiesData.pageInfo || { hasNextPage: false, endCursor: null };
 
-    all.push(...edges.map((edge) => enrichCompany(edge.node)));
+    // In commissions mode, skip expensive enrichment (notes, performance stats);
+    // we only need id, name, and assigned staff data for commission calculations
+    if (mode === 'commissions') {
+      all.push(...edges.map((edge) => {
+        const company = edge.node;
+        let assignedStaff = null;
+        try {
+          const assignedValue = company.assignedStaffMetafield?.value;
+          if (assignedValue) {
+            assignedStaff = JSON.parse(assignedValue);
+            if (assignedStaff && !assignedStaff.assignedAt) {
+              assignedStaff.assignedAt = company.assignedStaffMetafield?.updatedAt || null;
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to parse assigned staff for company', company.id, e.message);
+        }
+        return { id: company.id, name: company.name, assignedStaff };
+      }));
+    } else {
+      all.push(...edges.map((edge) => enrichCompany(edge.node)));
+    }
 
     hasNextPage = Boolean(pageInfo.hasNextPage);
     cursor = pageInfo.endCursor || null;
@@ -1036,19 +1167,13 @@ app.post('/api/staff', validateAuthenticatedSession, async (req, res) => {
     }
 
     const { name, email, commissionTier, role, pin } = req.body;
-    if (!name || !email || commissionTier === undefined || !role) {
-      return res.status(400).json({ error: 'name, email, commissionTier, and role required' });
+
+    if (!validators.string(name, 1, 255) || !validators.email(email) ||
+        !validators.commissionTier(commissionTier) || !validators.role(role)) {
+      return res.status(400).json({ error: 'Invalid input: check name, email, commissionTier (0-100), and role (manager/rep)' });
     }
 
-    if (!['manager', 'rep'].includes(role)) {
-      return res.status(400).json({ error: 'role must be "manager" or "rep"' });
-    }
-
-    if (commissionTier < 0 || commissionTier > 100) {
-      return res.status(400).json({ error: 'commissionTier must be between 0 and 100' });
-    }
-
-    if (pin !== undefined && pin !== null && pin !== '' && !/^\d{4}$/.test(String(pin))) {
+    if (pin !== undefined && pin !== null && pin !== '' && !validators.pin(pin)) {
       return res.status(400).json({ error: 'Starter code must be exactly 4 digits.' });
     }
 
@@ -1070,7 +1195,8 @@ app.post('/api/staff', validateAuthenticatedSession, async (req, res) => {
     // Blank/omitted leaves an existing code untouched (an edit-staff save
     // must not silently wipe a code the rep already set for themselves).
     if (pin !== undefined && pin !== null && pin !== '') {
-      await staffStore.forceSetPin(record.id, hashPin(String(pin)));
+      const pinHash = await hashPin(String(pin));
+      await staffStore.forceSetPin(record.id, pinHash);
       record.hasPin = true;
     }
 
@@ -1230,6 +1356,10 @@ app.post('/api/companies/:companyId/assignment', validateAuthenticatedSession, a
 
     await setCompanyMetafield(client, companyId, 'assigned_staff', JSON.stringify(assignedStaff));
 
+    // Clear commission cache since assignment changed
+    const shopId = res.locals.shopify?.session?.shop || 'unknown';
+    commissionCache.clear(shopId);
+
     res.json({ success: true, assignedStaff });
   } catch (error) {
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
@@ -1275,11 +1405,12 @@ app.post('/api/commissions/pin/set', validateAuthenticatedSession, async (req, r
     }
 
     const pin = String(req.body?.pin || '');
-    if (!/^\d{4}$/.test(pin)) {
+    if (!validators.pin(pin)) {
       return res.status(400).json({ error: 'Code must be exactly 4 digits.' });
     }
 
-    const didSet = await staffStore.setPin(ownStaff.id, hashPin(pin));
+    const pinHash = await hashPin(pin);
+    const didSet = await staffStore.setPin(ownStaff.id, pinHash);
     if (!didSet) {
       return res.status(409).json({ error: 'A code is already set. Ask a manager to reset it if you forgot yours.' });
     }
@@ -1309,7 +1440,11 @@ app.post('/api/commissions/pin/verify', validateAuthenticatedSession, async (req
     }
 
     const pin = String(req.body?.pin || '');
-    const ok = verifyPinHash(pin, pinInfo?.pinHash);
+    if (!validators.pin(pin)) {
+      return res.status(400).json({ error: 'Invalid code format.' });
+    }
+
+    const ok = await verifyPinHash(pin, pinInfo?.pinHash);
     const attempts = await staffStore.recordPinAttempt(ownStaff.id, ok);
 
     if (!ok) {
@@ -1355,7 +1490,7 @@ app.post('/api/commissions/pin/change', validateAuthenticatedSession, async (req
     }
 
     const currentPin = String(req.body?.currentPin || '');
-    const ok = verifyPinHash(currentPin, pinInfo.pinHash);
+    const ok = await verifyPinHash(currentPin, pinInfo.pinHash);
     if (!ok) {
       const attempts = await staffStore.recordPinAttempt(ownStaff.id, false);
       const remaining = Math.max(0, PIN_MAX_ATTEMPTS - attempts);
@@ -1366,7 +1501,8 @@ app.post('/api/commissions/pin/change', validateAuthenticatedSession, async (req
       });
     }
 
-    await staffStore.forceSetPin(ownStaff.id, hashPin(newPin));
+    const newPinHash = await hashPin(newPin);
+    await staffStore.forceSetPin(ownStaff.id, newPinHash);
     req.session.commissionsUnlockedFor = ownStaff.id;
     res.json({ success: true });
   } catch (error) {
@@ -1634,6 +1770,15 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
       });
     }
 
+    // Check cache for manager data (reps only see their own, no cache needed)
+    const shopId = res.locals.shopify?.session?.shop || 'unknown';
+    if (isUserManager) {
+      const cached = commissionCache.get(shopId, 'all');
+      if (cached) {
+        return res.json(cached);
+      }
+    }
+
     // Fetch all companies with their app-owned rep assignment and revenue
     const companies = await fetchAllCompanies(client, { mode: 'commissions' });
     const allStaff = await staffStore.list();
@@ -1697,11 +1842,18 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
     // Sort by total commission descending
     commissions.sort((a, b) => b.totalCommission - a.totalCommission);
 
-    res.json({
+    const response = {
       commissions,
       isManager: isUserManager,
       generatedAt: new Date().toISOString()
-    });
+    };
+
+    // Cache manager data for 5 minutes (reps see personal data, less cacheable)
+    if (isUserManager && shopId !== 'unknown') {
+      commissionCache.set(shopId, 'all', response);
+    }
+
+    res.json(response);
   } catch (error) {
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
       return sendShopifyApiError(res, error);

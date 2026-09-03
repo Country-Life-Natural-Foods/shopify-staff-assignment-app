@@ -28,14 +28,14 @@
     "express": "^4.18.2",
     "express-session": "^1.17.3",
     "helmet": "^7.1.0",
-    "node-cron": "^3.0.3",
+    "node-cron": "^4.6.0",
     "pg": "^8.21.0",
     "redis": "^4.6.13",
-    "sqlite3": "^5.1.7"
+    "sqlite3": "^6.0.1"
   },
   "devDependencies": {
     "neonctl": "^2.22.0",
-    "vercel": "^54.1.0"
+    "vercel": "^59.11.2"
   },
   "keywords": [
     "shopify",

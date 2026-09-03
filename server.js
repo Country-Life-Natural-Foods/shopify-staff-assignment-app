@@ -15,6 +15,15 @@ const { shopifyApp } = require('@shopify/shopify-app-express');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const isProduction = process.env.NODE_ENV === 'production';
+
+const sessionSecret = process.env.SESSION_SECRET;
+if (isProduction && !sessionSecret) {
+  throw new Error(
+    'Production environment requires SESSION_SECRET environment variable. Set it in Vercel project settings.',
+  );
+}
+
 const sqlite3 = require('sqlite3').verbose();
 const db = new sqlite3.Database(process.env.DATABASE_URL?.replace('./', '') || 'sessions.sqlite');
 
@@ -46,7 +55,7 @@ app.use(express.urlencoded({ extended: true }));
 // Session configuration
 app.use(session({
   store: new SQLiteStore({ db: 'sessions.sqlite' }),
-  secret: process.env.SESSION_SECRET || 'your-session-secret',
+  secret: sessionSecret || 'dev-session-secret-change-in-production',
   resave: false,
   saveUninitialized: false,
   cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 } // 24 hours
