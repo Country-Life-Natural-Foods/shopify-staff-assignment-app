@@ -206,6 +206,26 @@ app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Request logging middleware for debugging and monitoring
+app.use((req, res, next) => {
+  const start = Date.now();
+  const originalSend = res.send;
+
+  res.send = function(data) {
+    const duration = Date.now() - start;
+    const statusCode = res.statusCode;
+    const method = req.method;
+    const path = req.path;
+    const query = Object.keys(req.query).length ? `?${new URLSearchParams(req.query)}` : '';
+    const level = statusCode >= 500 ? 'error' : statusCode >= 400 ? 'warn' : 'info';
+    console.log(`[${level}] ${method} ${path}${query} ${statusCode} ${duration}ms`);
+    res.send = originalSend;
+    return originalSend.call(this, data);
+  };
+
+  next();
+});
+
 // Fail fast instead of hanging for the full Vercel maxDuration (300s).
 // Production logs showed the embedded app's "/" route stall for the entire
 // 300 seconds and come back as a 504 when the Postgres session lookup hit a
