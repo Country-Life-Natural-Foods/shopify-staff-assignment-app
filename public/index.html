@@ -12,8 +12,6 @@
     <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #f6faff; }
-        .loading-overlay { display: none; }
-        .loading-overlay.active { display: flex; }
         .toast {
             transform: translate(-50%, calc(100% + 1.5rem));
             opacity: 0;
@@ -90,12 +88,6 @@
             Map
         </button>
     </div>
-</div>
-
-<!-- Loading Overlay -->
-<div id="loading-overlay" class="loading-overlay fixed inset-0 bg-white/80 backdrop-blur-sm z-50 items-center justify-center flex-col gap-4">
-    <div class="w-12 h-12 border-4 border-[#008060]/20 border-t-[#008060] rounded-full animate-spin"></div>
-    <p class="text-[#008060] font-medium animate-pulse">Loading...</p>
 </div>
 
 <div id="status-toast" class="toast fixed bottom-20 md:bottom-6 left-1/2 bg-red-600 text-white px-6 py-3 rounded-lg shadow-xl flex items-center gap-2 max-w-[90vw] md:max-w-md w-full" role="status" aria-live="polite">
@@ -381,6 +373,7 @@
 
 <script>window.shopifyApiFetch = window.fetch.bind(window);</script>
 <script type="module" src="/shopify-session-bootstrap.js"></script>
+<script src="/page-progress.js"></script>
 <script>
     let companies = [];
     let locations = [];
@@ -459,8 +452,9 @@
 
     document.getElementById('reports-link').href = apiUrl('/reports');
 
-    function setLoading(active) {
-        document.getElementById('loading-overlay').classList.toggle('active', active);
+    function setLoading(active, label = 'Loading') {
+        if (active) window.pageProgress.begin({ total: 1, label });
+        else window.pageProgress.finish();
     }
 
     function showToast(msg, type = 'error') {
@@ -504,28 +498,30 @@
     let pinGateMode = null; // 'set' | 'verify'
 
     async function checkCommissionsAccess() {
-        setLoading(true);
+        window.pageProgress.begin({ total: 1, label: 'Checking access' });
         try {
             const res = await window.shopifyApiFetch(apiUrl('/api/commissions/access'));
             if (!res.ok) throw new Error(await readApiError(res, 'Failed to check access'));
             const access = await res.json();
             if (!access.hasStaffRecord) {
+                window.pageProgress.fail();
                 showError('Ask a manager to add you as staff before viewing commissions.');
                 return;
             }
             if (access.locked) {
+                window.pageProgress.fail();
                 showError('Too many incorrect attempts. Ask a manager to reset your code.');
                 return;
             }
             if (access.unlocked) {
-                loadCommissions();
+                await loadCommissions();
                 return;
             }
+            window.pageProgress.finish();
             openPinGateModal(access.hasPin ? 'verify' : 'set');
         } catch (e) {
+            window.pageProgress.fail();
             showError(e.message);
-        } finally {
-            setLoading(false);
         }
     }
 
@@ -558,7 +554,7 @@
         }
 
         const endpoint = pinGateMode === 'set' ? '/api/commissions/pin/set' : '/api/commissions/pin/verify';
-        setLoading(true);
+        setLoading(true, 'Checking code');
         try {
             const res = await window.shopifyApiFetch(apiUrl(endpoint), {
                 method: 'POST',
@@ -567,17 +563,17 @@
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
+                window.pageProgress.fail();
                 errorEl.textContent = data.error || 'Something went wrong.';
                 errorEl.classList.remove('hidden');
                 return;
             }
             closePinGateModal();
-            loadCommissions();
+            await loadCommissions();
         } catch (e) {
+            window.pageProgress.fail();
             errorEl.textContent = e.message;
             errorEl.classList.remove('hidden');
-        } finally {
-            setLoading(false);
         }
     }
 
@@ -687,12 +683,23 @@
         renderCustomers();
     }
 
-    async function loadData(silent = false) {
-        if (!silent) setLoading(true);
+    async function loadData(silent = false, onStep) {
+        const ownBar = !silent && typeof onStep !== 'function';
+        if (ownBar) window.pageProgress.begin({ total: 2, label: 'Loading dashboard' });
+        const step = (label) => {
+            if (typeof onStep === 'function') onStep(label);
+            else if (ownBar) window.pageProgress.advance(label);
+        };
         try {
             const [companiesRes, locationsRes] = await Promise.all([
-                window.shopifyApiFetch(apiUrl('/api/companies')),
-                window.shopifyApiFetch(apiUrl('/api/locations'))
+                window.shopifyApiFetch(apiUrl('/api/companies')).then((res) => {
+                    step('Companies loaded');
+                    return res;
+                }),
+                window.shopifyApiFetch(apiUrl('/api/locations')).then((res) => {
+                    step('Map locations loaded');
+                    return res;
+                }),
             ]);
 
             if (!companiesRes.ok) {
@@ -722,13 +729,13 @@
             renderCustomers();
             renderSummary();
             if (map) updateMarkers();
+            if (ownBar) window.pageProgress.finish();
             return true;
         } catch (e) {
             console.error(e);
             showError(e.message);
+            if (ownBar) window.pageProgress.fail();
             return false;
-        } finally {
-            if (!silent) setLoading(false);
         }
     }
 
@@ -1023,27 +1030,30 @@
     let currentUser = null;
 
     async function loadCommissions() {
-        setLoading(true);
+        window.pageProgress.begin({ total: 100, label: 'Loading commissions' });
         try {
-            const res = await window.shopifyApiFetch(apiUrl('/api/commissions'));
+            const { res, data } = await window.fetchJsonWithProgress(
+                apiUrl('/api/commissions'),
+                {},
+                window.applyWorkProgress,
+            );
             if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
                 // Defense in depth: the server is the real gate (see
                 // /api/commissions), this just re-shows the right prompt if
                 // the unlock state changed since checkCommissionsAccess ran.
                 if (data.code === 'PIN_REQUIRED' || data.code === 'PIN_NOT_SET') {
+                    window.pageProgress.fail();
                     openPinGateModal(data.code === 'PIN_NOT_SET' ? 'set' : 'verify');
                     return;
                 }
                 throw new Error(data.error || 'Failed to load commissions');
             }
-            const data = await res.json();
             commissionData = data;
             renderCommissions();
+            window.pageProgress.finish();
         } catch (e) {
+            window.pageProgress.fail();
             showError('Failed to load commissions: ' + e.message);
-        } finally {
-            setLoading(false);
         }
     }
 
@@ -1124,17 +1134,19 @@
     }
 
     async function loadStaff(silent = false) {
-        if (!silent) setLoading(true);
+        if (!silent) window.pageProgress.begin({ total: 1, label: 'Loading staff' });
         try {
             const res = await window.shopifyApiFetch(apiUrl('/api/staff'));
             if (!res.ok) throw new Error('Failed to load staff');
             const data = await res.json();
             staffList = data.staff || [];
             if (currentTab === 'staff') renderStaff();
+            if (!silent) window.pageProgress.finish();
         } catch (e) {
-            if (!silent) showError('Failed to load staff: ' + e.message);
-        } finally {
-            if (!silent) setLoading(false);
+            if (!silent) {
+                window.pageProgress.fail();
+                showError('Failed to load staff: ' + e.message);
+            }
         }
     }
 
@@ -1507,9 +1519,20 @@
     async function init() {
         if (started) return;
         started = true;
-        await Promise.all([checkUserRole(), loadStaff(true)]);
-        updateClaimStaffVisibility();
-        loadData();
+        window.pageProgress.begin({ total: 4, label: 'Loading dashboard' });
+        try {
+            await Promise.all([
+                checkUserRole().then(() => window.pageProgress.advance('Account ready')),
+                loadStaff(true).then(() => window.pageProgress.advance('Staff loaded')),
+            ]);
+            updateClaimStaffVisibility();
+            const loaded = await loadData(true, (label) => window.pageProgress.advance(label));
+            if (loaded) window.pageProgress.finish();
+            else window.pageProgress.fail();
+        } catch (e) {
+            window.pageProgress.fail();
+            showError(e.message);
+        }
     }
     window.addEventListener('shopify:api-fetch-ready', init, { once: true });
     window.addEventListener('load', init, { once: true });
