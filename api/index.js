@@ -44,6 +44,54 @@ const { shopifyGraphql } = require('../lib/shopify-gql');
 
 applyShopifyDeploymentEnv();
 
+// Simple in-memory cache with TTL for commission data
+// Stores expensive query results (commission calculations) for 5 minutes
+class CommissionCache {
+  constructor(ttlMs = 5 * 60 * 1000) {
+    this.cache = new Map();
+    this.ttlMs = ttlMs;
+  }
+
+  makeKey(shopId, staffId) {
+    return `commission:${shopId}:${staffId}`;
+  }
+
+  get(shopId, staffId) {
+    const key = this.makeKey(shopId, staffId);
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.cache.delete(key);
+      return null;
+    }
+    return entry.data;
+  }
+
+  set(shopId, staffId, data) {
+    const key = this.makeKey(shopId, staffId);
+    this.cache.set(key, {
+      data,
+      expiresAt: Date.now() + this.ttlMs,
+    });
+  }
+
+  clear(shopId, staffId) {
+    if (staffId) {
+      this.cache.delete(this.makeKey(shopId, staffId));
+    } else {
+      // Clear all for a shop
+      const prefix = `commission:${shopId}:`;
+      for (const key of this.cache.keys()) {
+        if (key.startsWith(prefix)) {
+          this.cache.delete(key);
+        }
+      }
+    }
+  }
+}
+
+const commissionCache = new CommissionCache();
+
 function formatShopifyClientError(err) {
   if (err instanceof GraphqlQueryError) {
     const gqlErrs = err.body?.errors?.graphQLErrors;
@@ -1258,6 +1306,10 @@ app.post('/api/companies/:companyId/assignment', validateAuthenticatedSession, a
 
     await setCompanyMetafield(client, companyId, 'assigned_staff', JSON.stringify(assignedStaff));
 
+    // Clear commission cache since assignment changed
+    const shopId = res.locals.shopify?.session?.shop || 'unknown';
+    commissionCache.clear(shopId);
+
     res.json({ success: true, assignedStaff });
   } catch (error) {
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
@@ -1664,6 +1716,15 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
       });
     }
 
+    // Check cache for manager data (reps only see their own, no cache needed)
+    const shopId = res.locals.shopify?.session?.shop || 'unknown';
+    if (isUserManager) {
+      const cached = commissionCache.get(shopId, 'all');
+      if (cached) {
+        return res.json(cached);
+      }
+    }
+
     // Fetch all companies with their app-owned rep assignment and revenue
     const companies = await fetchAllCompanies(client, { mode: 'commissions' });
     const allStaff = await staffStore.list();
@@ -1727,11 +1788,18 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
     // Sort by total commission descending
     commissions.sort((a, b) => b.totalCommission - a.totalCommission);
 
-    res.json({
+    const response = {
       commissions,
       isManager: isUserManager,
       generatedAt: new Date().toISOString()
-    });
+    };
+
+    // Cache manager data for 5 minutes (reps see personal data, less cacheable)
+    if (isUserManager && shopId !== 'unknown') {
+      commissionCache.set(shopId, 'all', response);
+    }
+
+    res.json(response);
   } catch (error) {
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
       return sendShopifyApiError(res, error);
