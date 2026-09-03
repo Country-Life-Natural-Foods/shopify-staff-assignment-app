@@ -374,22 +374,28 @@ const isManager = async (user) => {
 // verification, so a PIN tied to the staff record (not the Shopify login)
 // is what actually keeps someone from seeing another rep's numbers.
 const PIN_MAX_ATTEMPTS = 5;
+const { promisify } = require('util');
+const scryptAsync = promisify(crypto.scrypt);
 
-function hashPin(pin) {
+async function hashPin(pin) {
   const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(pin, salt, 64).toString('hex');
-  return `${salt}:${hash}`;
+  const hash = await scryptAsync(pin, salt, 64);
+  return `${salt}:${hash.toString('hex')}`;
 }
 
-function verifyPinHash(pin, stored) {
+async function verifyPinHash(pin, stored) {
   if (!stored) return false;
   const [salt, hash] = stored.split(':');
   if (!salt || !hash) return false;
-  const candidate = crypto.scryptSync(pin, salt, 64).toString('hex');
-  const a = Buffer.from(hash, 'hex');
-  const b = Buffer.from(candidate, 'hex');
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+  try {
+    const candidate = await scryptAsync(pin, salt, 64);
+    const a = Buffer.from(hash, 'hex');
+    const b = candidate;
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
 }
 
 const getGraphqlClient = async (req, res) => {
@@ -1070,7 +1076,8 @@ app.post('/api/staff', validateAuthenticatedSession, async (req, res) => {
     // Blank/omitted leaves an existing code untouched (an edit-staff save
     // must not silently wipe a code the rep already set for themselves).
     if (pin !== undefined && pin !== null && pin !== '') {
-      await staffStore.forceSetPin(record.id, hashPin(String(pin)));
+      const pinHash = await hashPin(String(pin));
+      await staffStore.forceSetPin(record.id, pinHash);
       record.hasPin = true;
     }
 
@@ -1279,7 +1286,8 @@ app.post('/api/commissions/pin/set', validateAuthenticatedSession, async (req, r
       return res.status(400).json({ error: 'Code must be exactly 4 digits.' });
     }
 
-    const didSet = await staffStore.setPin(ownStaff.id, hashPin(pin));
+    const pinHash = await hashPin(pin);
+    const didSet = await staffStore.setPin(ownStaff.id, pinHash);
     if (!didSet) {
       return res.status(409).json({ error: 'A code is already set. Ask a manager to reset it if you forgot yours.' });
     }
@@ -1309,7 +1317,7 @@ app.post('/api/commissions/pin/verify', validateAuthenticatedSession, async (req
     }
 
     const pin = String(req.body?.pin || '');
-    const ok = verifyPinHash(pin, pinInfo?.pinHash);
+    const ok = await verifyPinHash(pin, pinInfo?.pinHash);
     const attempts = await staffStore.recordPinAttempt(ownStaff.id, ok);
 
     if (!ok) {
@@ -1355,7 +1363,7 @@ app.post('/api/commissions/pin/change', validateAuthenticatedSession, async (req
     }
 
     const currentPin = String(req.body?.currentPin || '');
-    const ok = verifyPinHash(currentPin, pinInfo.pinHash);
+    const ok = await verifyPinHash(currentPin, pinInfo.pinHash);
     if (!ok) {
       const attempts = await staffStore.recordPinAttempt(ownStaff.id, false);
       const remaining = Math.max(0, PIN_MAX_ATTEMPTS - attempts);
@@ -1366,7 +1374,8 @@ app.post('/api/commissions/pin/change', validateAuthenticatedSession, async (req
       });
     }
 
-    await staffStore.forceSetPin(ownStaff.id, hashPin(newPin));
+    const newPinHash = await hashPin(newPin);
+    await staffStore.forceSetPin(ownStaff.id, newPinHash);
     req.session.commissionsUnlockedFor = ownStaff.id;
     res.json({ success: true });
   } catch (error) {
