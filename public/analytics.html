@@ -164,6 +164,32 @@
     .table-header {
       padding: 20px;
       border-bottom: 1px solid #e5e7eb;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 15px;
+      flex-wrap: wrap;
+    }
+
+    .table-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .table-controls select {
+      padding: 8px 12px;
+      border: 1px solid #d4d4d5;
+      border-radius: 4px;
+      font-size: 14px;
+      background-color: white;
+      color: #202223;
+      cursor: pointer;
+    }
+
+    .table-count {
+      font-size: 13px;
+      color: #6d7175;
     }
 
     .table-header h2 {
@@ -448,6 +474,16 @@
     <div class="data-table">
       <div class="table-header">
         <h2>Companies</h2>
+        <div class="table-controls">
+          <span class="table-count" id="companiesCount"></span>
+          <label for="companiesLimit">Show</label>
+          <select id="companiesLimit">
+            <option value="50" selected>50 rows</option>
+            <option value="100">100 rows</option>
+            <option value="250">250 rows</option>
+            <option value="all">All rows</option>
+          </select>
+        </div>
       </div>
       <table>
         <thead>
@@ -475,6 +511,16 @@
     <div class="data-table">
       <div class="table-header">
         <h2>Top Products</h2>
+        <div class="table-controls">
+          <span class="table-count" id="productsCount"></span>
+          <label for="productsLimit">Show</label>
+          <select id="productsLimit">
+            <option value="50" selected>50 rows</option>
+            <option value="100">100 rows</option>
+            <option value="250">250 rows</option>
+            <option value="all">All rows</option>
+          </select>
+        </div>
       </div>
       <table>
         <thead>
@@ -519,6 +565,27 @@
 
     document.getElementById('back-link').href = apiUrl('/');
     document.getElementById('reports-link').href = apiUrl('/reports');
+
+    // Full table datasets, kept so the row-limit filter can re-render without refetching
+    const tableData = {
+      companies: [],
+      products: [],
+    };
+
+    function getRowLimit(selectId) {
+      const select = document.getElementById(selectId);
+      if (!select || select.value === 'all') return null;
+      const limit = parseInt(select.value, 10);
+      return Number.isNaN(limit) ? null : limit;
+    }
+
+    function updateTableCount(countId, shown, total) {
+      const el = document.getElementById(countId);
+      if (!el) return;
+      el.textContent = total > 0
+        ? `Showing ${shown.toLocaleString()} of ${total.toLocaleString()}`
+        : '';
+    }
 
     // Chart instances storage
     const charts = {
@@ -998,14 +1065,25 @@
 
     // ==================== TABLES ====================
     function renderCompaniesTable(companies) {
+      tableData.companies = companies || [];
+      renderCompaniesRows();
+    }
+
+    function renderCompaniesRows() {
       const tbody = document.getElementById('companiesTableBody');
+      const companies = tableData.companies;
 
       if (!companies || companies.length === 0) {
         tbody.innerHTML = '<tr><td colspan="7" class="no-data">No companies data available</td></tr>';
+        updateTableCount('companiesCount', 0, 0);
         return;
       }
 
-      tbody.innerHTML = companies.map(company => `
+      const limit = getRowLimit('companiesLimit');
+      const visible = limit ? companies.slice(0, limit) : companies;
+      updateTableCount('companiesCount', visible.length, companies.length);
+
+      tbody.innerHTML = visible.map(company => `
         <tr>
           <td>${escapeHtml(company.name || 'N/A')}</td>
           <td>${formatCurrency(company.totalSpent || 0, company.currency || 'USD')}</td>
@@ -1019,19 +1097,30 @@
     }
 
     function renderProductsTable(products) {
+      tableData.products = products || [];
+      renderProductsRows();
+    }
+
+    function renderProductsRows() {
       const tbody = document.getElementById('productsTableBody');
+      const products = tableData.products;
 
       if (!products || products.length === 0) {
         tbody.innerHTML = '<tr><td colspan="4" class="no-data">No products data available</td></tr>';
+        updateTableCount('productsCount', 0, 0);
         return;
       }
+
+      const limit = getRowLimit('productsLimit');
+      const visible = limit ? products.slice(0, limit) : products;
+      updateTableCount('productsCount', visible.length, products.length);
 
       // Handle both revenue-based and catalog-based product data
       const hasRevenueData = products.some(p => p.revenue !== undefined || p.unitsSold !== undefined);
 
       if (hasRevenueData) {
         // Display revenue metrics
-        tbody.innerHTML = products.map(product => `
+        tbody.innerHTML = visible.map(product => `
           <tr>
             <td>${escapeHtml(product.title || 'N/A')}</td>
             <td>${formatCurrency(product.revenue || 0, product.currencyCode || 'USD')}</td>
@@ -1041,7 +1130,7 @@
         `).join('');
       } else {
         // Display catalog data (inventory, status)
-        tbody.innerHTML = products.map(product => `
+        tbody.innerHTML = visible.map(product => `
           <tr>
             <td>${escapeHtml(product.title || 'N/A')}</td>
             <td>${product.status || 'N/A'}</td>
@@ -1094,6 +1183,8 @@
     // ==================== EVENT LISTENERS ====================
     document.getElementById('applyFilter').addEventListener('click', refreshAllData);
     document.getElementById('exportBtn').addEventListener('click', () => exportData('csv'));
+    document.getElementById('companiesLimit').addEventListener('change', renderCompaniesRows);
+    document.getElementById('productsLimit').addEventListener('change', renderProductsRows);
 
     // ==================== INITIALIZATION ====================
     function initialize() {

@@ -42,7 +42,7 @@ const {
 const { configureSessionStorage } = require('../lib/configure-session-storage');
 const { configureStaffStore } = require('../lib/staff-store');
 const { configureCompanyMetrics } = require('../lib/company-metrics');
-const { shopifyGraphql } = require('../lib/shopify-gql');
+const { shopifyGraphql, uniqueErrorMessages } = require('../lib/shopify-gql');
 
 applyShopifyDeploymentEnv();
 
@@ -134,7 +134,7 @@ function formatShopifyClientError(err) {
   if (err instanceof GraphqlQueryError) {
     const gqlErrs = err.body?.errors?.graphQLErrors;
     if (Array.isArray(gqlErrs) && gqlErrs.length > 0) {
-      return gqlErrs.map((e) => e.message).join('; ');
+      return uniqueErrorMessages(gqlErrs);
     }
   }
   if (err instanceof HttpResponseError && err.response?.body && typeof err.response.body === 'object') {
@@ -142,7 +142,7 @@ function formatShopifyClientError(err) {
       const b = err.response.body;
       const gql = b.errors?.graphQLErrors;
       if (Array.isArray(gql) && gql.length > 0) {
-        return gql.map((e) => e.message).join('; ');
+        return uniqueErrorMessages(gql);
       }
     } catch (_) {
       /* ignore */
