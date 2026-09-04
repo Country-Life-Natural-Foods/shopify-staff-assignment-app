@@ -95,9 +95,21 @@
 
     .kpi-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 15px;
       margin-bottom: 20px;
+    }
+
+    @media (max-width: 1100px) {
+      .kpi-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 640px) {
+      .kpi-grid {
+        grid-template-columns: 1fr;
+      }
     }
 
     .kpi-card {
@@ -129,9 +141,15 @@
 
     .charts-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 15px;
       margin-bottom: 20px;
+    }
+
+    @media (max-width: 900px) {
+      .charts-grid {
+        grid-template-columns: 1fr;
+      }
     }
 
     .chart-container {
@@ -162,6 +180,10 @@
     .chart-wrapper {
       position: relative;
       height: 300px;
+    }
+
+    .revenue-trend-chart {
+      height: 380px;
     }
 
     .revenue-mix-layout {
@@ -298,6 +320,66 @@
     .table-count {
       font-size: 13px;
       color: #6d7175;
+    }
+
+    .table-pager {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .table-pager button {
+      padding: 6px 12px;
+      background: #fff;
+      color: #202223;
+      border: 1px solid #d4d4d5;
+    }
+
+    .table-pager button:hover:not(:disabled) {
+      background: #f6f6f7;
+    }
+
+    .table-pager button:disabled {
+      background: #fff;
+      color: #a1a1aa;
+      border-color: #e5e7eb;
+    }
+
+    .table-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 12px 20px;
+      border-top: 1px solid #e5e7eb;
+    }
+
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    th.sortable:hover {
+      color: #202223;
+      background: #eef0f1;
+    }
+
+    th.sortable .sort-ind {
+      display: inline-block;
+      margin-left: 4px;
+      font-size: 10px;
+      opacity: 0.3;
+    }
+
+    th.sortable.is-sorted {
+      color: #202223;
+    }
+
+    th.sortable.is-sorted .sort-ind {
+      opacity: 1;
+      color: #008060;
     }
 
     .table-header h2 {
@@ -545,14 +627,15 @@
       </div>
     </div>
 
-    <!-- Charts -->
-    <div class="charts-grid">
-      <div class="chart-container">
-        <div class="chart-title">Revenue Trend</div>
-        <div class="chart-wrapper">
-          <canvas id="revenueTrendChart"></canvas>
-        </div>
+    <div class="chart-container chart-container-full">
+      <div class="chart-title">Revenue Trend</div>
+      <p class="chart-subtitle" id="revenueTrendSubtitle">January through today</p>
+      <div class="chart-wrapper revenue-trend-chart">
+        <canvas id="revenueTrendChart"></canvas>
       </div>
+    </div>
+
+    <div class="charts-grid">
       <div class="chart-container">
         <div class="chart-title">Companies by Revenue</div>
         <div class="chart-wrapper">
@@ -603,25 +686,24 @@
         <h2>Companies</h2>
         <div class="table-controls">
           <span class="table-count" id="companiesCount"></span>
-          <label for="companiesLimit">Show</label>
+          <label for="companiesLimit">Rows per page</label>
           <select id="companiesLimit">
-            <option value="50" selected>50 rows</option>
-            <option value="100">100 rows</option>
-            <option value="250">250 rows</option>
-            <option value="all">All rows</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="250">250</option>
           </select>
         </div>
       </div>
-      <table>
+      <table id="companiesTable">
         <thead>
           <tr>
-            <th>Company Name</th>
-            <th>Total Spent</th>
-            <th>Orders</th>
-            <th>Avg Order Value</th>
-            <th>Last Order Date</th>
-            <th>Days Since Last Order</th>
-            <th>Contacts</th>
+            <th class="sortable" data-sort-key="name" data-sort-default="asc">Company Name <span class="sort-ind">↕</span></th>
+            <th class="sortable is-sorted" data-sort-key="totalSpent" data-sort-default="desc">Total Spent <span class="sort-ind">↓</span></th>
+            <th class="sortable" data-sort-key="ordersCount" data-sort-default="desc">Orders <span class="sort-ind">↕</span></th>
+            <th class="sortable" data-sort-key="avgOrderValue" data-sort-default="desc">Avg Order Value <span class="sort-ind">↕</span></th>
+            <th class="sortable" data-sort-key="lastOrderDate" data-sort-default="desc">Last Order Date <span class="sort-ind">↕</span></th>
+            <th class="sortable" data-sort-key="daysSinceLastOrder" data-sort-default="desc">Days Since Last Order <span class="sort-ind">↕</span></th>
+            <th class="sortable" data-sort-key="contactCount" data-sort-default="desc">Contacts <span class="sort-ind">↕</span></th>
           </tr>
         </thead>
         <tbody id="companiesTableBody">
@@ -633,6 +715,13 @@
           </tr>
         </tbody>
       </table>
+      <div class="table-footer" id="companiesPager">
+        <span class="table-count" id="companiesPageLabel"></span>
+        <div class="table-pager">
+          <button type="button" id="companiesPrevPage">Previous</button>
+          <button type="button" id="companiesNextPage">Next</button>
+        </div>
+      </div>
     </div>
 
     <div class="data-table">
@@ -640,22 +729,21 @@
         <h2>Top Products</h2>
         <div class="table-controls">
           <span class="table-count" id="productsCount"></span>
-          <label for="productsLimit">Show</label>
+          <label for="productsLimit">Rows per page</label>
           <select id="productsLimit">
-            <option value="50" selected>50 rows</option>
-            <option value="100">100 rows</option>
-            <option value="250">250 rows</option>
-            <option value="all">All rows</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="250">250</option>
           </select>
         </div>
       </div>
-      <table>
+      <table id="productsTable">
         <thead>
           <tr>
-            <th>Product Name</th>
-            <th>Revenue</th>
-            <th>Quantity Sold</th>
-            <th>Units Per Order</th>
+            <th class="sortable" data-sort-key="title" data-sort-default="asc">Product Name <span class="sort-ind">↕</span></th>
+            <th class="sortable is-sorted" data-sort-key="revenue" data-sort-default="desc">Revenue <span class="sort-ind">↓</span></th>
+            <th class="sortable" data-sort-key="quantitySold" data-sort-default="desc">Quantity Sold <span class="sort-ind">↕</span></th>
+            <th class="sortable" data-sort-key="unitsPerOrder" data-sort-default="desc">Units Per Order <span class="sort-ind">↕</span></th>
           </tr>
         </thead>
         <tbody id="productsTableBody">
@@ -667,6 +755,13 @@
           </tr>
         </tbody>
       </table>
+      <div class="table-footer" id="productsPager">
+        <span class="table-count" id="productsPageLabel"></span>
+        <div class="table-pager">
+          <button type="button" id="productsPrevPage">Previous</button>
+          <button type="button" id="productsNextPage">Next</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -676,7 +771,6 @@
     // ==================== CONFIGURATION ====================
     const config = {
       API_BASE: '/api/analytics',
-      DEFAULT_DATE_RANGE_DAYS: 90,
     };
 
     function apiUrl(path) {
@@ -693,25 +787,92 @@
     document.getElementById('back-link').href = apiUrl('/');
     document.getElementById('reports-link').href = apiUrl('/reports');
 
-    // Full table datasets, kept so the row-limit filter can re-render without refetching
-    const tableData = {
-      companies: [],
-      products: [],
+    const tableState = {
+      companies: { rows: [], page: 1, sortKey: 'totalSpent', sortDir: 'desc' },
+      products: { rows: [], page: 1, sortKey: 'revenue', sortDir: 'desc' },
     };
 
-    function getRowLimit(selectId) {
-      const select = document.getElementById(selectId);
-      if (!select || select.value === 'all') return null;
-      const limit = parseInt(select.value, 10);
-      return Number.isNaN(limit) ? null : limit;
+    const companySortValue = {
+      name: (row) => (row.name || '').toLowerCase(),
+      totalSpent: (row) => parseFloat(row.totalSpent) || 0,
+      ordersCount: (row) => parseInt(row.ordersCount, 10) || 0,
+      avgOrderValue: (row) => parseFloat(row.avgOrderValue) || 0,
+      lastOrderDate: (row) => (row.lastOrderDate ? new Date(row.lastOrderDate).getTime() : null),
+      daysSinceLastOrder: (row) => (row.daysSinceLastOrder == null ? null : Number(row.daysSinceLastOrder)),
+      contactCount: (row) => parseInt(row.contactCount, 10) || 0,
+    };
+
+    function productQuantity(row) {
+      return parseFloat(row.quantitySold || row.unitsSold || row.quantity || 0) || 0;
     }
 
-    function updateTableCount(countId, shown, total) {
-      const el = document.getElementById(countId);
-      if (!el) return;
-      el.textContent = total > 0
-        ? `Showing ${shown.toLocaleString()} of ${total.toLocaleString()}`
+    const productSortValue = {
+      title: (row) => (row.title || '').toLowerCase(),
+      revenue: (row) => parseFloat(row.revenue) || 0,
+      quantitySold: (row) => productQuantity(row),
+      unitsPerOrder: (row) => {
+        const qty = productQuantity(row);
+        return qty > 0 ? (parseFloat(row.revenue) || 0) / qty : 0;
+      },
+    };
+
+    function getPageSize(selectId) {
+      const select = document.getElementById(selectId);
+      const size = parseInt(select && select.value, 10);
+      return Number.isNaN(size) ? 50 : size;
+    }
+
+    function compareSortValues(a, b, dir) {
+      const mul = dir === 'asc' ? 1 : -1;
+      if (a == null && b == null) return 0;
+      if (a == null) return 1;
+      if (b == null) return -1;
+      if (typeof a === 'string' && typeof b === 'string') return a.localeCompare(b) * mul;
+      return (a - b) * mul;
+    }
+
+    function sortedRows(rows, getters, sortKey, sortDir) {
+      const getter = getters[sortKey];
+      if (!getter) return rows.slice();
+      return rows.slice().sort((left, right) => compareSortValues(getter(left), getter(right), sortDir));
+    }
+
+    function pageSlice(rows, page, pageSize) {
+      const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+      const safePage = Math.min(Math.max(page, 1), totalPages);
+      const start = (safePage - 1) * pageSize;
+      return {
+        visible: rows.slice(start, start + pageSize),
+        page: safePage,
+        totalPages,
+        start: rows.length === 0 ? 0 : start + 1,
+        end: Math.min(start + pageSize, rows.length),
+      };
+    }
+
+    function updateSortHeaders(tableId, sortKey, sortDir) {
+      document.querySelectorAll(`#${tableId} th.sortable`).forEach((th) => {
+        const active = th.dataset.sortKey === sortKey;
+        th.classList.toggle('is-sorted', active);
+        const mark = th.querySelector('.sort-ind');
+        if (mark) mark.textContent = active ? (sortDir === 'asc' ? '↑' : '↓') : '↕';
+      });
+    }
+
+    function updatePager(prefix, page, totalPages, start, end, total) {
+      const countEl = document.getElementById(`${prefix}Count`);
+      const labelEl = document.getElementById(`${prefix}PageLabel`);
+      const pagerEl = document.getElementById(`${prefix}Pager`);
+      const prevEl = document.getElementById(`${prefix}PrevPage`);
+      const nextEl = document.getElementById(`${prefix}NextPage`);
+      const text = total > 0
+        ? `Showing ${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`
         : '';
+      if (countEl) countEl.textContent = text;
+      if (labelEl) labelEl.textContent = total > 0 ? `Page ${page} of ${totalPages}` : '';
+      if (pagerEl) pagerEl.style.display = total > 0 ? '' : 'none';
+      if (prevEl) prevEl.disabled = page <= 1;
+      if (nextEl) nextEl.disabled = page >= totalPages;
     }
 
     // Chart instances storage
@@ -730,15 +891,70 @@
       return `${year}-${month}-${day}`;
     }
 
-    function getDefaultDateRange() {
-      const endDate = new Date();
-      const startDate = new Date(endDate);
-      startDate.setDate(startDate.getDate() - config.DEFAULT_DATE_RANGE_DAYS);
-
+    function yearToDateRange(now = new Date()) {
       return {
-        startDate: formatLocalDate(startDate),
-        endDate: formatLocalDate(endDate),
+        startDate: `${now.getFullYear()}-01-01`,
+        endDate: formatLocalDate(now),
       };
+    }
+
+    function getDefaultDateRange() {
+      return yearToDateRange();
+    }
+
+    function formatChartRangeLabel(startDate, endDate) {
+      const start = parseLocalDate(startDate);
+      const end = parseLocalDate(endDate);
+      const startLabel = start.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+      const endLabel = end.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+      return `${startLabel} through ${endLabel}`;
+    }
+
+    function parseLocalDate(value) {
+      if (/^\d{4}-\d{2}$/.test(value)) {
+        const [year, month] = value.split('-').map(Number);
+        return new Date(year, month - 1, 1);
+      }
+      const [year, month, day] = String(value).slice(0, 10).split('-').map(Number);
+      return new Date(year, (month || 1) - 1, day || 1);
+    }
+
+    function fillTrendGaps(trends, startDate, endDate, period) {
+      const byKey = new Map((trends || []).map((row) => {
+        const key = period === 'monthly' ? String(row.date).slice(0, 7) : String(row.date).slice(0, 10);
+        return [key, row];
+      }));
+      const filled = [];
+      const cursor = parseLocalDate(startDate);
+      const last = parseLocalDate(endDate);
+
+      if (period === 'monthly') {
+        cursor.setDate(1);
+        last.setDate(1);
+        while (cursor <= last) {
+          const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`;
+          const existing = byKey.get(key);
+          filled.push({
+            date: key,
+            revenue: parseFloat(existing && existing.revenue) || 0,
+            orders: parseInt(existing && existing.orders, 10) || 0,
+          });
+          cursor.setMonth(cursor.getMonth() + 1);
+        }
+        return filled;
+      }
+
+      while (cursor <= last) {
+        const key = formatLocalDate(cursor);
+        const existing = byKey.get(key);
+        filled.push({
+          date: key,
+          revenue: parseFloat(existing && existing.revenue) || 0,
+          orders: parseInt(existing && existing.orders, 10) || 0,
+        });
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      return filled;
     }
 
     function initializeDateInputs() {
@@ -787,8 +1003,7 @@
     }
 
     // ==================== API CALLS ====================
-    async function fetchWithDateRange(endpoint) {
-      const dateParams = getDateRangeParams();
+    async function fetchWithDateRange(endpoint, dateParams = getDateRangeParams()) {
       if (!dateParams) return null;
 
       const url = new URL(endpoint, window.location.origin);
@@ -832,10 +1047,14 @@
 
     async function fetchRevenueTrend() {
       try {
-        const data = await fetchWithDateRange(config.API_BASE + '/revenue-trend?period=daily');
+        const ytd = yearToDateRange();
+        const data = await fetchWithDateRange(config.API_BASE + '/revenue-trend?period=monthly', {
+          startDate: `${ytd.startDate}T00:00:00.000Z`,
+          endDate: `${ytd.endDate}T23:59:59.999Z`,
+        });
         if (data && data.trends) {
           noteDataSource(data);
-          renderRevenueTrendChart(data.trends);
+          renderRevenueTrendChart(data.trends, ytd);
         }
       } catch (error) {
         handleApiError(error, 'revenue trend');
@@ -911,7 +1130,7 @@
       // Total Revenue
       const totalRevenue = data.revenue || 0;
       document.getElementById('totalRevenue').textContent = formatNumber(totalRevenue);
-      document.getElementById('revenueTrend').textContent = `${currency} currency`;
+      document.getElementById('revenueTrend').textContent = 'Selected date range';
 
       // Total Orders
       const totalOrders = data.orders || 0;
@@ -974,19 +1193,23 @@
       }
     }
 
-    function renderRevenueTrendChart(trends) {
+    function renderRevenueTrendChart(trends, range = yearToDateRange()) {
       destroyChart(charts.revenueTrend);
 
       const ctx = document.getElementById('revenueTrendChart');
       if (!ctx || typeof Chart !== 'function') return;
 
-      const labels = trends.map(t => {
-        const date = new Date(t.date);
-        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      });
+      const subtitle = document.getElementById('revenueTrendSubtitle');
+      if (subtitle) {
+        subtitle.textContent = formatChartRangeLabel(range.startDate, range.endDate);
+      }
 
-      const revenues = trends.map(t => parseFloat(t.revenue) || 0);
-      const orders = trends.map(t => parseInt(t.orders) || 0);
+      const series = fillTrendGaps(trends, range.startDate, range.endDate, 'monthly');
+      const labels = series.map((row) => {
+        return parseLocalDate(row.date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+      });
+      const revenues = series.map((row) => parseFloat(row.revenue) || 0);
+      const orders = series.map((row) => parseInt(row.orders, 10) || 0);
 
       charts.revenueTrend = new Chart(ctx, {
         type: 'line',
@@ -1269,25 +1492,31 @@
 
     // ==================== TABLES ====================
     function renderCompaniesTable(companies) {
-      tableData.companies = companies || [];
+      tableState.companies.rows = companies || [];
+      tableState.companies.page = 1;
       renderCompaniesRows();
     }
 
     function renderCompaniesRows() {
       const tbody = document.getElementById('companiesTableBody');
-      const companies = tableData.companies;
+      const state = tableState.companies;
+      const companies = state.rows;
 
       if (!companies || companies.length === 0) {
         tbody.innerHTML = '<tr><td colspan="7" class="no-data">No companies data available</td></tr>';
-        updateTableCount('companiesCount', 0, 0);
+        updatePager('companies', 1, 1, 0, 0, 0);
+        updateSortHeaders('companiesTable', state.sortKey, state.sortDir);
         return;
       }
 
-      const limit = getRowLimit('companiesLimit');
-      const visible = limit ? companies.slice(0, limit) : companies;
-      updateTableCount('companiesCount', visible.length, companies.length);
+      const ranked = sortedRows(companies, companySortValue, state.sortKey, state.sortDir);
+      const pageSize = getPageSize('companiesLimit');
+      const page = pageSlice(ranked, state.page, pageSize);
+      state.page = page.page;
+      updatePager('companies', page.page, page.totalPages, page.start, page.end, companies.length);
+      updateSortHeaders('companiesTable', state.sortKey, state.sortDir);
 
-      tbody.innerHTML = visible.map(company => `
+      tbody.innerHTML = page.visible.map(company => `
         <tr>
           <td>${escapeHtml(company.name || 'N/A')}</td>
           <td>${formatCurrency(company.totalSpent || 0, company.currency || 'USD')}</td>
@@ -1301,40 +1530,43 @@
     }
 
     function renderProductsTable(products) {
-      tableData.products = products || [];
+      tableState.products.rows = products || [];
+      tableState.products.page = 1;
       renderProductsRows();
     }
 
     function renderProductsRows() {
       const tbody = document.getElementById('productsTableBody');
-      const products = tableData.products;
+      const state = tableState.products;
+      const products = state.rows;
 
       if (!products || products.length === 0) {
         tbody.innerHTML = '<tr><td colspan="4" class="no-data">No products data available</td></tr>';
-        updateTableCount('productsCount', 0, 0);
+        updatePager('products', 1, 1, 0, 0, 0);
+        updateSortHeaders('productsTable', state.sortKey, state.sortDir);
         return;
       }
 
-      const limit = getRowLimit('productsLimit');
-      const visible = limit ? products.slice(0, limit) : products;
-      updateTableCount('productsCount', visible.length, products.length);
+      const ranked = sortedRows(products, productSortValue, state.sortKey, state.sortDir);
+      const pageSize = getPageSize('productsLimit');
+      const page = pageSlice(ranked, state.page, pageSize);
+      state.page = page.page;
+      updatePager('products', page.page, page.totalPages, page.start, page.end, products.length);
+      updateSortHeaders('productsTable', state.sortKey, state.sortDir);
 
-      // Handle both revenue-based and catalog-based product data
       const hasRevenueData = products.some(p => p.revenue !== undefined || p.unitsSold !== undefined);
 
       if (hasRevenueData) {
-        // Display revenue metrics
-        tbody.innerHTML = visible.map(product => `
+        tbody.innerHTML = page.visible.map(product => `
           <tr>
             <td>${escapeHtml(product.title || 'N/A')}</td>
             <td>${formatCurrency(product.revenue || 0, product.currencyCode || 'USD')}</td>
-            <td>${formatNumber(product.quantitySold || product.unitsSold || product.quantity || 0)}</td>
-            <td>${(product.quantitySold || product.unitsSold || product.quantity) && (product.quantitySold || product.unitsSold || product.quantity) > 0 ? ((product.revenue || 0) / (product.quantitySold || product.unitsSold || product.quantity)).toFixed(2) : 0}</td>
+            <td>${formatNumber(productQuantity(product))}</td>
+            <td>${productQuantity(product) > 0 ? ((product.revenue || 0) / productQuantity(product)).toFixed(2) : 0}</td>
           </tr>
         `).join('');
       } else {
-        // Display catalog data (inventory, status)
-        tbody.innerHTML = visible.map(product => `
+        tbody.innerHTML = page.visible.map(product => `
           <tr>
             <td>${escapeHtml(product.title || 'N/A')}</td>
             <td>${product.status || 'N/A'}</td>
@@ -1343,6 +1575,28 @@
           </tr>
         `).join('');
       }
+    }
+
+    function bindSortableHeaders(tableId, stateKey, renderFn) {
+      document.querySelectorAll(`#${tableId} th.sortable`).forEach((th) => {
+        th.addEventListener('click', () => {
+          const key = th.dataset.sortKey;
+          const state = tableState[stateKey];
+          if (state.sortKey === key) {
+            state.sortDir = state.sortDir === 'desc' ? 'asc' : 'desc';
+          } else {
+            state.sortKey = key;
+            state.sortDir = th.dataset.sortDefault || 'desc';
+          }
+          state.page = 1;
+          renderFn();
+        });
+      });
+    }
+
+    function changeTablePage(stateKey, delta, renderFn) {
+      tableState[stateKey].page += delta;
+      renderFn();
     }
 
     function escapeHtml(text) {
@@ -1387,8 +1641,28 @@
     // ==================== EVENT LISTENERS ====================
     document.getElementById('applyFilter').addEventListener('click', refreshAllData);
     document.getElementById('exportBtn').addEventListener('click', () => exportData('csv'));
-    document.getElementById('companiesLimit').addEventListener('change', renderCompaniesRows);
-    document.getElementById('productsLimit').addEventListener('change', renderProductsRows);
+    document.getElementById('companiesLimit').addEventListener('change', () => {
+      tableState.companies.page = 1;
+      renderCompaniesRows();
+    });
+    document.getElementById('productsLimit').addEventListener('change', () => {
+      tableState.products.page = 1;
+      renderProductsRows();
+    });
+    document.getElementById('companiesPrevPage').addEventListener('click', () => {
+      changeTablePage('companies', -1, renderCompaniesRows);
+    });
+    document.getElementById('companiesNextPage').addEventListener('click', () => {
+      changeTablePage('companies', 1, renderCompaniesRows);
+    });
+    document.getElementById('productsPrevPage').addEventListener('click', () => {
+      changeTablePage('products', -1, renderProductsRows);
+    });
+    document.getElementById('productsNextPage').addEventListener('click', () => {
+      changeTablePage('products', 1, renderProductsRows);
+    });
+    bindSortableHeaders('companiesTable', 'companies', renderCompaniesRows);
+    bindSortableHeaders('productsTable', 'products', renderProductsRows);
 
     // ==================== INITIALIZATION ====================
     function initialize() {
