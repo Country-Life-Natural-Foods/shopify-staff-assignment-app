@@ -40,9 +40,84 @@
     }
 
     .data-source {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
       font-size: 13px;
       color: #6d7175;
       margin-bottom: 20px;
+    }
+
+    .data-source-label {
+      margin: 0;
+      flex: 1 1 0;
+      min-width: 0;
+    }
+
+    .data-source-wave {
+      flex: 0 0 180px;
+      width: 180px;
+      min-width: 180px;
+      max-width: 180px;
+      height: 8px;
+      border-radius: 999px;
+      background: #fadbd7;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .data-source-wave-bar {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      width: 42%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(215, 44, 13, 0) 0%, #d72c0d 50%, rgba(215, 44, 13, 0) 100%);
+      animation: data-source-wave 1.6s ease-in-out infinite alternate;
+    }
+
+    @keyframes data-source-wave {
+      from { left: -8%; }
+      to { left: 66%; }
+    }
+
+    .data-source.is-backfilling {
+      background: #fff4f4;
+      border: 1px solid #fed3d1;
+      color: #8e1f0b;
+      font-size: 14px;
+      font-weight: 650;
+      padding: 10px 14px;
+      border-radius: 8px;
+      flex-wrap: nowrap;
+    }
+
+    .data-source.is-complete {
+      color: #1a7f37;
+      font-weight: 600;
+    }
+
+    @media (max-width: 700px) {
+      .data-source.is-backfilling {
+        flex-wrap: wrap;
+      }
+
+      .data-source-wave {
+        flex: 1 1 100%;
+        width: auto;
+        min-width: 0;
+        max-width: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .data-source-wave-bar {
+        animation: none;
+        left: 29%;
+        transform: none;
+      }
     }
 
     .date-filter {
@@ -587,7 +662,12 @@
   <div class="container">
     <header>
       <h1>Wholesale performance</h1>
-      <p id="data-source" class="data-source">Loading date-range metrics…</p>
+      <div id="data-source" class="data-source" role="status" aria-live="polite">
+        <p id="data-source-label" class="data-source-label">Loading date-range metrics…</p>
+        <div id="data-source-wave" class="data-source-wave" hidden>
+          <span class="data-source-wave-bar"></span>
+        </div>
+      </div>
       <div class="date-filter">
         <div class="date-input-group">
           <label for="startDate">Start Date</label>
@@ -1079,23 +1159,106 @@
       return data;
     }
 
-    function noteDataSource(data) {
-      const el = document.getElementById('data-source');
-      if (!el || !data) return;
-      const oldest = data.coverage?.oldest ? String(data.coverage.oldest).slice(0, 10) : null;
-      const newest = data.coverage?.newest ? String(data.coverage.newest).slice(0, 10) : null;
-      if (data.source === 'rollup') {
-        el.dataset.rollup = data.complete ? 'complete' : 'partial';
-        if (data.complete) {
-          el.textContent = 'B2B company orders only, summed for the selected dates.';
-        } else if (oldest && newest) {
-          el.textContent = `B2B company orders only. Currently ${oldest} through ${newest} — older months still backfilling.`;
-        } else {
-          el.textContent = 'B2B company orders only. Historical months are still backfilling.';
+    function formatBackfillEta(seconds) {
+      if (!Number.isFinite(seconds) || seconds <= 0) return null;
+      if (seconds >= 90 * 60) {
+        const hours = Math.max(1, Math.round(seconds / 3600));
+        return hours === 1 ? 'About 1 hour left' : `About ${hours} hours left`;
+      }
+      const minutes = Math.max(1, Math.round(seconds / 60));
+      if (minutes >= 50) return 'About 1 hour left';
+      return `About ${minutes} minutes left`;
+    }
+
+    const backfillUi = { coverage: null, timer: null };
+
+    function paintDataSource({ text, mode, live }) {
+      const wrap = document.getElementById('data-source');
+      const label = document.getElementById('data-source-label');
+      const wave = document.getElementById('data-source-wave');
+      if (!wrap || !label) return;
+      label.textContent = text;
+      wrap.classList.toggle('is-backfilling', mode === 'backfilling');
+      wrap.classList.toggle('is-complete', mode === 'complete');
+      wrap.dataset.rollup = mode === 'complete' ? 'complete' : (mode === 'backfilling' ? 'partial' : '');
+      if (wave) {
+        wave.hidden = mode !== 'backfilling';
+        wave.setAttribute('aria-hidden', mode === 'backfilling' ? 'false' : 'true');
+      }
+      if (live) wrap.setAttribute('aria-busy', mode === 'backfilling' ? 'true' : 'false');
+    }
+
+    function watchBackfill(active) {
+      if (!active) {
+        if (backfillUi.timer) {
+          clearInterval(backfillUi.timer);
+          backfillUi.timer = null;
         }
-      } else if (data.source === 'shopify') {
-        el.dataset.rollup = '';
-        el.textContent = 'B2B company orders only. Shopify is still limited to recent orders until historical access is granted.';
+        return;
+      }
+      if (backfillUi.timer) return;
+      backfillUi.timer = setInterval(async () => {
+        try {
+          const fetchFn = window.shopifyApiFetch || fetch;
+          const response = await fetchFn(apiUrl('/api/metrics/status'), { credentials: 'same-origin' });
+          const data = await response.json().catch(() => null);
+          if (!data || !data.backfill) return;
+          noteDataSource({
+            source: 'rollup',
+            complete: Boolean(data.backfill.complete),
+            coverage: backfillUi.coverage,
+            backfill: data.backfill,
+          });
+          if (data.backfill.complete && backfillUi.timer) {
+            clearInterval(backfillUi.timer);
+            backfillUi.timer = null;
+          }
+        } catch {
+          /* keep the last banner; cron may still be running */
+        }
+      }, 45000);
+    }
+
+    function noteDataSource(data) {
+      const wrap = document.getElementById('data-source');
+      if (!wrap || !data) return;
+      if (data.coverage) backfillUi.coverage = data.coverage;
+      const coverage = data.coverage || backfillUi.coverage;
+      const oldest = coverage?.oldest ? String(coverage.oldest).slice(0, 10) : null;
+      const newest = coverage?.newest ? String(coverage.newest).slice(0, 10) : null;
+      const progress = data.backfill || null;
+      const eta = progress ? formatBackfillEta(progress.etaSeconds) : null;
+      const percent = Number.isFinite(progress?.percent) ? progress.percent : null;
+
+      if (data.source === 'rollup' && (data.complete || progress?.complete)) {
+        paintDataSource({
+          text: 'B2B company orders only, summed for the selected dates.',
+          mode: 'complete',
+          live: true,
+        });
+        watchBackfill(false);
+        return;
+      }
+
+      if (data.source === 'rollup') {
+        let text = 'B2B company orders only. Historical months are still backfilling.';
+        if (oldest && newest) {
+          text = `B2B company orders only. Currently ${oldest} through ${newest} — older months still backfilling.`;
+        }
+        if (percent != null && percent > 0) text += ` ${percent}% done.`;
+        if (eta) text += ` ${eta}.`;
+        paintDataSource({ text, mode: 'backfilling', live: true });
+        watchBackfill(true);
+        return;
+      }
+
+      if (data.source === 'shopify') {
+        paintDataSource({
+          text: 'B2B company orders only. Shopify is still limited to recent orders until historical access is granted.',
+          mode: 'backfilling',
+          live: true,
+        });
+        watchBackfill(false);
       }
     }
 
@@ -1768,10 +1931,9 @@
         kpiState.current = null;
         kpiState.prior = null;
       }
-      const sourceEl = document.getElementById('data-source');
+      const sourceEl = document.getElementById('data-source-label');
       if (sourceEl && !painted) {
-        delete sourceEl.dataset.rollup;
-        sourceEl.textContent = 'Loading date-range metrics…';
+        paintDataSource({ text: 'Loading date-range metrics…', mode: '', live: true });
       }
       if (!painted && window.pageProgress) {
         window.pageProgress.begin({ total: 4, label: 'Loading analytics' });

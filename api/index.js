@@ -2354,7 +2354,7 @@ function validateISODate(value) {
 async function ensureRollupReady(client, { products } = {}) {
   const shop = shopFromClient(client);
   if (!companyMetrics.enabled || !shop) {
-    return { shop, ready: false, complete: false, productsReady: false, coverage: null };
+    return { shop, ready: false, complete: false, productsReady: false, coverage: null, progress: null };
   }
   try {
     const completeBefore = typeof companyMetrics.isComplete === 'function'
@@ -2373,16 +2373,20 @@ async function ensureRollupReady(client, { products } = {}) {
     const coverage = ready && typeof companyMetrics.orderCoverage === 'function'
       ? await companyMetrics.orderCoverage(shop)
       : null;
+    const progress = typeof companyMetrics.backfillProgress === 'function'
+      ? await companyMetrics.backfillProgress(shop)
+      : { complete, percent: complete ? 100 : 0, etaSeconds: null, phase: complete ? 'complete' : 'pending', cursorAt: null };
     return {
       shop,
       ready,
       complete,
       productsReady: ready && (await companyMetrics.isProductsReady(shop)),
       coverage,
+      progress,
     };
   } catch (err) {
     console.error('[company-metrics] analytics rollup ensure failed', err);
-    return { shop, ready: false, complete: false, productsReady: false, coverage: null };
+    return { shop, ready: false, complete: false, productsReady: false, coverage: null, progress: null };
   }
 }
 
@@ -2392,6 +2396,7 @@ function withRollupMeta(payload, rollup) {
     source: 'rollup',
     complete: Boolean(rollup.complete),
     coverage: rollup.coverage || null,
+    backfill: rollup.progress || null,
   };
 }
 
