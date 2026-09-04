@@ -714,10 +714,10 @@
         const cachedLocations = cache.peek(apiUrl('/api/locations'));
         const cachedStaff = cache.peek(apiUrl('/api/staff'));
         const cachedSession = cache.peek(apiUrl('/api/session-info'));
-        if (cachedCompanies) applyCompaniesPayload(cachedCompanies);
-        if (cachedLocations) applyLocationsPayload(cachedLocations);
         if (cachedStaff) staffList = cachedStaff.staff || [];
         if (cachedSession) applySessionInfo(cachedSession);
+        if (cachedCompanies) applyCompaniesPayload(cachedCompanies);
+        if (cachedLocations) applyLocationsPayload(cachedLocations);
         updateClaimStaffVisibility();
         return Boolean(cachedCompanies);
     }

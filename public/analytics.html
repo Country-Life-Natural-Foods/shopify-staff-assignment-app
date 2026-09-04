@@ -1708,18 +1708,57 @@
     }
 
     // ==================== REFRESH ALL ====================
-    function analyticsHasCache() {
+    function paintAnalyticsFromCache() {
+      if (!window.AppDataCache) return false;
       const dateParams = getDateRangeParams();
-      if (!dateParams || !window.AppDataCache) return false;
-      const summaryUrl = buildAnalyticsUrl(config.API_BASE + '/summary', dateParams);
-      return Boolean(summaryUrl && window.AppDataCache.peek(summaryUrl));
+      if (!dateParams) return false;
+
+      const summary = window.AppDataCache.peek(buildAnalyticsUrl(config.API_BASE + '/summary', dateParams));
+      if (summary && summary.summary) {
+        noteDataSource(summary);
+        updateKPICards(summary.summary);
+      }
+      const priorParams = shiftRangeByYears(dateParams, -1);
+      const prior = window.AppDataCache.peek(buildAnalyticsUrl(config.API_BASE + '/summary', priorParams));
+      if (prior && prior.summary) updateKPICards(undefined, prior.summary);
+
+      const compare = yearOverYearRange();
+      const trend = window.AppDataCache.peek(buildAnalyticsUrl(config.API_BASE + '/revenue-trend?period=monthly', {
+        startDate: `${compare.startDate}T00:00:00.000Z`,
+        endDate: `${compare.endDate}T23:59:59.999Z`,
+      }));
+      if (trend && trend.trends) {
+        noteDataSource(trend);
+        renderRevenueTrendChart(trend.trends, compare);
+      }
+
+      const companiesData = window.AppDataCache.peek(
+        buildAnalyticsUrl(config.API_BASE + '/companies?sortBy=revenue&sortOrder=desc', dateParams),
+      );
+      if (companiesData) {
+        noteDataSource(companiesData);
+        renderCompaniesTable(companiesData.companies || []);
+        renderCompaniesByRevenueChart(companiesData.companies || []);
+        renderRevenueMixChart(companiesData.companies || []);
+      }
+
+      const productsData = window.AppDataCache.peek(buildAnalyticsUrl(config.API_BASE + '/products', dateParams));
+      if (productsData) {
+        noteDataSource(productsData);
+        renderProductsTable(productsData.products || []);
+        renderTopProductsChart(productsData.products || []);
+      }
+
+      return Boolean(summary && summary.summary);
     }
 
     async function refreshAllData() {
-      kpiState.current = null;
-      kpiState.prior = null;
       document.getElementById('applyFilter').disabled = true;
-      const painted = analyticsHasCache();
+      const painted = paintAnalyticsFromCache();
+      if (!painted) {
+        kpiState.current = null;
+        kpiState.prior = null;
+      }
       const sourceEl = document.getElementById('data-source');
       if (sourceEl && !painted) {
         delete sourceEl.dataset.rollup;
