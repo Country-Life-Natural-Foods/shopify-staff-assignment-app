@@ -1060,8 +1060,8 @@
       if (!url) return null;
 
       if (window.AppDataCache) {
-        const { data, revalidate } = await window.AppDataCache.loadJson(url, { onCached: apply });
-        if (typeof apply === 'function' && data) apply(data);
+        const { data, fromCache, revalidate } = await window.AppDataCache.loadJson(url);
+        if (!fromCache && typeof apply === 'function' && data) apply(data);
         if (revalidate) {
           revalidate.then((fresh) => {
             if (fresh?.data && typeof apply === 'function') apply(fresh.data);

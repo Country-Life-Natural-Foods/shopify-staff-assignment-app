@@ -260,16 +260,27 @@
   }
 
   function defaultAnalyticsUrls() {
-    const range = ytdRange();
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const ytd = {
+      startDate: `${year}-01-01T00:00:00.000Z`,
+      endDate: `${year}-${month}-${day}T23:59:59.999Z`,
+    };
+    const yoyTrend = {
+      startDate: `${year - 1}-01-01T00:00:00.000Z`,
+      endDate: `${year}-${month}-${day}T23:59:59.999Z`,
+    };
     return {
-      summary: analyticsUrl('/api/analytics/summary', range),
-      trend: analyticsUrl('/api/analytics/revenue-trend', { ...range, period: 'monthly' }),
+      summary: analyticsUrl('/api/analytics/summary', ytd),
+      trend: analyticsUrl('/api/analytics/revenue-trend', { ...yoyTrend, period: 'monthly' }),
       companies: analyticsUrl('/api/analytics/companies', {
-        ...range,
+        ...ytd,
         sortBy: 'revenue',
         sortOrder: 'desc',
       }),
-      products: analyticsUrl('/api/analytics/products', range),
+      products: analyticsUrl('/api/analytics/products', ytd),
     };
   }
 

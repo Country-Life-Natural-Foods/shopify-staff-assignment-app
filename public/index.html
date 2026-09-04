@@ -723,10 +723,8 @@
     }
 
     async function refreshCompanies() {
-        const { data, revalidate } = await window.AppDataCache.loadJson(apiUrl('/api/companies'), {
-            onCached: applyCompaniesPayload,
-        });
-        applyCompaniesPayload(data);
+        const { data, fromCache, revalidate } = await window.AppDataCache.loadJson(apiUrl('/api/companies'));
+        if (!fromCache) applyCompaniesPayload(data);
         if (revalidate) {
             revalidate.then((fresh) => {
                 if (fresh?.data) applyCompaniesPayload(fresh.data);
@@ -737,10 +735,8 @@
 
     async function refreshLocations() {
         try {
-            const { data, revalidate } = await window.AppDataCache.loadJson(apiUrl('/api/locations'), {
-                onCached: applyLocationsPayload,
-            });
-            applyLocationsPayload(data);
+            const { data, fromCache, revalidate } = await window.AppDataCache.loadJson(apiUrl('/api/locations'));
+            if (!fromCache) applyLocationsPayload(data);
             if (revalidate) {
                 revalidate.then((fresh) => {
                     if (fresh?.data) applyLocationsPayload(fresh.data);
