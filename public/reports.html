@@ -43,10 +43,6 @@
         <span class="font-bold text-lg hidden sm:block">Commission Reports</span>
     </div>
     <div class="flex items-center gap-2">
-        <a id="analytics-link" href="/analytics" class="bg-white border border-zinc-200 text-zinc-700 px-3 py-2 rounded-md text-sm font-medium hover:bg-zinc-50 active:scale-[0.98] transition-all flex items-center gap-1.5">
-            <span class="material-symbols-outlined text-sm">monitoring</span>
-            <span class="hidden sm:inline">Analytics</span>
-        </a>
         <input id="report-month" type="month" class="border border-zinc-200 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none"/>
         <button onclick="downloadCsv()" class="bg-white border border-zinc-200 text-zinc-700 px-3 py-2 rounded-md text-sm font-medium hover:bg-zinc-50 active:scale-[0.98] transition-all flex items-center gap-1.5">
             <span class="material-symbols-outlined text-sm">download</span>
@@ -139,7 +135,6 @@
     // Preserve shop/host so navigating back into the tabbed dashboard stays embedded.
     document.getElementById('back-link').href = apiUrl('/');
     document.getElementById('pin-gate-back').href = apiUrl('/');
-    document.getElementById('analytics-link').href = apiUrl('/analytics');
 
     function setLoading(active, label = 'Loading') {
         if (active) window.pageProgress.begin({ total: 1, label });

@@ -467,6 +467,22 @@ function orderWebhookHandler() {
   };
 }
 
+// Refunds get their own topic because a money-only refund (no line items
+// returned) never changes current_total_price and often never even fires
+// orders/updated for third-party apps — so it's the only reliable way to
+// net a refund out of a rep's commission revenue.
+function refundWebhookHandler() {
+  return {
+    deliveryMethod: DeliveryMethod.Http,
+    callbackUrl: shopifyAppInstance.config.webhooks.path,
+    callback: async (_topic, shop, body) => {
+      const payload = typeof body === 'string' ? JSON.parse(body) : body;
+      const result = await companyMetrics.ingestRefund(shop, payload);
+      if (result.applied) commissionCache.clear(shop);
+    },
+  };
+}
+
 app.post(
   shopifyAppInstance.config.webhooks.path,
   ...shopifyAppInstance.processWebhooks({
@@ -474,6 +490,7 @@ app.post(
       ORDERS_CREATE: orderWebhookHandler(),
       ORDERS_UPDATED: orderWebhookHandler(),
       ORDERS_CANCELLED: orderWebhookHandler(),
+      REFUNDS_CREATE: refundWebhookHandler(),
     },
   }),
 );
@@ -2341,7 +2358,7 @@ async function ensureRollupReady(client, { products } = {}) {
     if (typeof companyMetrics.isComplete === 'function'
       ? !(await companyMetrics.isComplete(shop))
       : !(await companyMetrics.isReady(shop))) {
-      await companyMetrics.backfillChunk(shop, client, { maxPages: 15, maxMs: 25000 });
+      await companyMetrics.backfillChunk(shop, client, { maxPages: 20, maxMs: 25000 });
     }
     const ready = await companyMetrics.isReady(shop);
     if (products && ready && !(await companyMetrics.isProductsReady(shop))) {
