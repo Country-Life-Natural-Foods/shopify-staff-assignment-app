@@ -1082,12 +1082,21 @@
     function noteDataSource(data) {
       const el = document.getElementById('data-source');
       if (!el || !data) return;
+      const oldest = data.coverage?.oldest ? String(data.coverage.oldest).slice(0, 10) : null;
+      const newest = data.coverage?.newest ? String(data.coverage.newest).slice(0, 10) : null;
       if (data.source === 'rollup') {
-        el.textContent = 'Numbers are from the order rollup for the selected dates.';
-      } else if (data.source === 'shopify' && !el.dataset.rollup) {
-        el.textContent = 'Still paging Shopify for this range. The rollup will take over after backfill finishes.';
+        el.dataset.rollup = data.complete ? 'complete' : 'partial';
+        if (data.complete) {
+          el.textContent = 'B2B company orders only, summed for the selected dates.';
+        } else if (oldest && newest) {
+          el.textContent = `B2B company orders only. Currently ${oldest} through ${newest} — older months still backfilling.`;
+        } else {
+          el.textContent = 'B2B company orders only. Historical months are still backfilling.';
+        }
+      } else if (data.source === 'shopify') {
+        el.dataset.rollup = '';
+        el.textContent = 'B2B company orders only. Shopify is still limited to recent orders until historical access is granted.';
       }
-      if (data.source === 'rollup') el.dataset.rollup = '1';
     }
 
     async function fetchAnalyticsSummary() {

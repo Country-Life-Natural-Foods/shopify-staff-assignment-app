@@ -7,7 +7,7 @@
  * invalidatePrefix() so the next read hits the network.
  */
 (function initAppDataCache(global) {
-  const PREFIX = 'clnf-cache:v1:';
+  const PREFIX = 'clnf-cache:v2:';
   const MAX_STORE_BYTES = 2_000_000;
   const memory = new Map();
   const inflight = new Map();

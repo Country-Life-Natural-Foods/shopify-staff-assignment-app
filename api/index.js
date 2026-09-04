@@ -2354,27 +2354,45 @@ function validateISODate(value) {
 async function ensureRollupReady(client, { products } = {}) {
   const shop = shopFromClient(client);
   if (!companyMetrics.enabled || !shop) {
-    return { shop, ready: false, productsReady: false };
+    return { shop, ready: false, complete: false, productsReady: false, coverage: null };
   }
   try {
-    if (typeof companyMetrics.isComplete === 'function'
-      ? !(await companyMetrics.isComplete(shop))
-      : !(await companyMetrics.isReady(shop))) {
+    const completeBefore = typeof companyMetrics.isComplete === 'function'
+      ? await companyMetrics.isComplete(shop)
+      : false;
+    if (!completeBefore) {
       await companyMetrics.backfillChunk(shop, client, { maxPages: 20, maxMs: 25000 });
     }
-    const ready = await companyMetrics.isComplete(shop);
+    const complete = typeof companyMetrics.isComplete === 'function'
+      ? await companyMetrics.isComplete(shop)
+      : false;
+    const ready = await companyMetrics.isReady(shop);
     if (products && ready && !(await companyMetrics.isProductsReady(shop))) {
       await companyMetrics.backfillProductChunk(shop, client, { maxPages: 6, maxMs: 18000 });
     }
+    const coverage = ready && typeof companyMetrics.orderCoverage === 'function'
+      ? await companyMetrics.orderCoverage(shop)
+      : null;
     return {
       shop,
       ready,
+      complete,
       productsReady: ready && (await companyMetrics.isProductsReady(shop)),
+      coverage,
     };
   } catch (err) {
     console.error('[company-metrics] analytics rollup ensure failed', err);
-    return { shop, ready: false, productsReady: false };
+    return { shop, ready: false, complete: false, productsReady: false, coverage: null };
   }
+}
+
+function withRollupMeta(payload, rollup) {
+  return {
+    ...payload,
+    source: 'rollup',
+    complete: Boolean(rollup.complete),
+    coverage: rollup.coverage || null,
+  };
 }
 
 async function buildRollupSummary(client, shop, startDate, endDate, { productsReady } = {}) {
@@ -2603,9 +2621,12 @@ app.get('/api/analytics/summary', validateAuthenticatedSession, async (req, res)
 
     const rollup = await ensureRollupReady(client, { products: true });
     if (rollup.ready) {
-      return res.json(await buildRollupSummary(client, rollup.shop, startDate, endDate, {
-        productsReady: rollup.productsReady,
-      }));
+      return res.json(withRollupMeta(
+        await buildRollupSummary(client, rollup.shop, startDate, endDate, {
+          productsReady: rollup.productsReady,
+        }),
+        rollup,
+      ));
     }
 
     const result = await buildAnalyticsSummary(client, startDate, endDate);
@@ -2666,10 +2687,10 @@ app.get('/api/analytics/revenue-trend', validateAuthenticatedSession, async (req
         startDate ? startDate.slice(0, 10) : null,
         endDate ? endDate.slice(0, 10) : null,
       );
-      return res.json({
+      return res.json(withRollupMeta({
         ...trendFromRollupDays(days, period),
         generatedAt: new Date().toISOString(),
-      });
+      }, rollup));
     }
 
     const result = await getRevenueTrend(client, { period, maxPages, startDate, endDate });
@@ -2725,13 +2746,16 @@ app.get('/api/analytics/companies', validateAuthenticatedSession, async (req, re
 
     const rollup = await ensureRollupReady(client);
     if (rollup.ready) {
-      return res.json(await buildRollupCompanies(client, rollup.shop, {
-        sortBy,
-        sortOrder,
-        maxPages: Math.max(maxPages, 20),
-        startDate,
-        endDate,
-      }));
+      return res.json(withRollupMeta(
+        await buildRollupCompanies(client, rollup.shop, {
+          sortBy,
+          sortOrder,
+          maxPages: Math.max(maxPages, 20),
+          startDate,
+          endDate,
+        }),
+        rollup,
+      ));
     }
 
     const result = await getCompaniesAnalytics(client, { sortBy, sortOrder, maxPages, startDate, endDate });
@@ -2804,7 +2828,7 @@ app.get('/api/analytics/companies/:companyId', validateAuthenticatedSession, asy
       if (!rollupResult) {
         return res.status(404).json({ error: 'Company not found', code: 'COMPANY_NOT_FOUND' });
       }
-      return res.json(rollupResult);
+      return res.json(withRollupMeta(rollupResult, rollup));
     }
 
     const result = await getCompanyAnalytics(client, companyId);
@@ -2863,7 +2887,7 @@ app.get('/api/analytics/products', validateAuthenticatedSession, async (req, res
     const rollup = await ensureRollupReady(client, { products: true });
     if (rollup.productsReady) {
       const products = await companyMetrics.productsRange(rollup.shop, startDate, endDate);
-      return res.json(buildRollupProducts(products));
+      return res.json(withRollupMeta(buildRollupProducts(products), rollup));
     }
 
     const result = await getProductsAnalytics(client, { status, maxPages, startDate, endDate });
@@ -2924,16 +2948,25 @@ app.get('/api/analytics/export', validateAuthenticatedSession, async (req, res) 
 
     if (dataType === 'companies') {
       data = rollup.ready
-        ? await buildRollupCompanies(client, rollup.shop, { maxPages: 20, startDate, endDate })
+        ? withRollupMeta(
+          await buildRollupCompanies(client, rollup.shop, { maxPages: 20, startDate, endDate }),
+          rollup,
+        )
         : await getCompaniesAnalytics(client, { maxPages: 20, startDate, endDate });
     } else if (dataType === 'products') {
       data = rollup.productsReady
-        ? buildRollupProducts(await companyMetrics.productsRange(rollup.shop, startDate, endDate))
+        ? withRollupMeta(
+          buildRollupProducts(await companyMetrics.productsRange(rollup.shop, startDate, endDate)),
+          rollup,
+        )
         : await getProductsAnalytics(client, { maxPages: 20, startDate, endDate });
     } else if (rollup.ready) {
-      data = await buildRollupSummary(client, rollup.shop, startDate, endDate, {
-        productsReady: rollup.productsReady,
-      });
+      data = withRollupMeta(
+        await buildRollupSummary(client, rollup.shop, startDate, endDate, {
+          productsReady: rollup.productsReady,
+        }),
+        rollup,
+      );
     } else {
       data = await buildAnalyticsSummary(client, startDate, endDate);
     }
