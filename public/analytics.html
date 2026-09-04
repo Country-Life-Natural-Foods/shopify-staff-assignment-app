@@ -141,16 +141,124 @@
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     }
 
+    .chart-container-full {
+      width: 100%;
+      margin-bottom: 20px;
+    }
+
     .chart-title {
       font-size: 16px;
       font-weight: 600;
-      margin-bottom: 15px;
+      margin-bottom: 6px;
       color: #202223;
+    }
+
+    .chart-subtitle {
+      font-size: 13px;
+      color: #6d7175;
+      margin-bottom: 16px;
     }
 
     .chart-wrapper {
       position: relative;
       height: 300px;
+    }
+
+    .revenue-mix-layout {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.4fr);
+      gap: 20px;
+      align-items: start;
+    }
+
+    .revenue-mix-chart {
+      height: 380px;
+    }
+
+    .revenue-mix-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      color: #6d7175;
+    }
+
+    .revenue-mix-stats strong {
+      color: #202223;
+      font-weight: 600;
+    }
+
+    .revenue-mix-table-wrap {
+      overflow: auto;
+      max-height: 420px;
+    }
+
+    .revenue-mix-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .revenue-mix-table th,
+    .revenue-mix-table td {
+      padding: 8px 10px;
+      font-size: 13px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .revenue-mix-table th {
+      position: sticky;
+      top: 0;
+      background: #f6f6f7;
+      text-transform: uppercase;
+      font-size: 11px;
+      color: #6d7175;
+    }
+
+    .revenue-mix-table td.num,
+    .revenue-mix-table th.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .mix-swatch {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+
+    .mix-bar {
+      display: block;
+      height: 6px;
+      background: #f1f1f1;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 4px;
+    }
+
+    .mix-bar > span {
+      display: block;
+      height: 100%;
+      border-radius: 3px;
+    }
+
+    .revenue-mix-table tr.mix-others td {
+      color: #6d7175;
+      font-style: italic;
+    }
+
+    @media (max-width: 900px) {
+      .revenue-mix-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .revenue-mix-chart {
+        height: 300px;
+      }
     }
 
     .data-table {
@@ -435,11 +543,6 @@
         <div class="kpi-value" id="topProductName" style="font-size: 16px;">-</div>
         <div class="kpi-subtext" id="topProductRevenue">Revenue: -</div>
       </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Currency</div>
-        <div class="kpi-value" id="currency">-</div>
-        <div class="kpi-subtext">Base currency</div>
-      </div>
     </div>
 
     <!-- Charts -->
@@ -462,10 +565,34 @@
           <canvas id="topProductsChart"></canvas>
         </div>
       </div>
-      <div class="chart-container">
-        <div class="chart-title">Revenue Mix by Company</div>
-        <div class="chart-wrapper">
+    </div>
+
+    <div class="chart-container chart-container-full">
+      <div class="chart-title">Revenue Mix by Company</div>
+      <p class="chart-subtitle">Share of wholesale revenue in the selected date range. Named slices are the largest accounts; remaining companies are grouped as All others.</p>
+      <div class="revenue-mix-stats" id="revenueMixStats"></div>
+      <div class="revenue-mix-layout">
+        <div class="chart-wrapper revenue-mix-chart">
           <canvas id="revenueMixChart"></canvas>
+        </div>
+        <div class="revenue-mix-table-wrap">
+          <table class="revenue-mix-table">
+            <thead>
+              <tr>
+                <th>Company</th>
+                <th class="num">Revenue</th>
+                <th class="num">Share</th>
+                <th class="num">Orders</th>
+                <th class="num">Avg order</th>
+                <th class="num">Cumulative</th>
+              </tr>
+            </thead>
+            <tbody id="revenueMixTableBody">
+              <tr>
+                <td colspan="6" class="no-data">Loading revenue mix…</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -807,9 +934,6 @@
         document.getElementById('topProductRevenue').textContent =
           `Revenue: ${currencySymbol}${formatNumber(topProductRevenue)}`;
       }
-
-      // Currency
-      document.getElementById('currency').textContent = currency;
     }
 
     function getCurrencySymbol(code) {
@@ -1021,33 +1145,104 @@
       });
     }
 
+    function formatPercent(value) {
+      if (!Number.isFinite(value) || value <= 0) return '0%';
+      if (value < 0.1) return '<0.1%';
+      if (value >= 10) return value.toFixed(1) + '%';
+      return value.toFixed(2) + '%';
+    }
+
     function renderRevenueMixChart(companies) {
       destroyChart(charts.revenueMix);
 
       const ctx = document.getElementById('revenueMixChart');
-      if (!ctx || typeof Chart !== 'function') return;
+      const tbody = document.getElementById('revenueMixTableBody');
+      const statsEl = document.getElementById('revenueMixStats');
+      const ranked = (companies || [])
+        .map((company) => {
+          const revenue = parseFloat(company.totalSpent) || 0;
+          const orders = parseInt(company.ordersCount, 10) || 0;
+          return {
+            name: company.name || 'Unknown',
+            revenue,
+            orders,
+            avgOrder: orders > 0 ? revenue / orders : (parseFloat(company.avgOrderValue) || 0),
+          };
+        })
+        .filter((row) => row.revenue > 0)
+        .sort((a, b) => b.revenue - a.revenue);
 
-      // Sort by revenue and take top 8
-      const topCompanies = companies
-        .sort((a, b) => (parseFloat(b.totalSpent) || 0) - (parseFloat(a.totalSpent) || 0))
-        .slice(0, 8);
+      const totalRevenue = ranked.reduce((sum, row) => sum + row.revenue, 0);
+      const namedLimit = 15;
+      const named = ranked.slice(0, namedLimit);
+      const others = ranked.slice(namedLimit);
+      const othersRevenue = others.reduce((sum, row) => sum + row.revenue, 0);
+      const othersOrders = others.reduce((sum, row) => sum + row.orders, 0);
+      const mixRows = named.map((row) => ({ ...row, isOthers: false }));
+      if (othersRevenue > 0) {
+        mixRows.push({
+          name: `All others (${others.length} companies)`,
+          revenue: othersRevenue,
+          orders: othersOrders,
+          avgOrder: othersOrders > 0 ? othersRevenue / othersOrders : 0,
+          isOthers: true,
+        });
+      }
 
-      const labels = topCompanies.map(c => c.name || 'Unknown');
-      const data = topCompanies.map(c => parseFloat(c.totalSpent) || 0);
+      if (statsEl) {
+        const namedShare = totalRevenue > 0
+          ? (named.reduce((sum, row) => sum + row.revenue, 0) / totalRevenue) * 100
+          : 0;
+        statsEl.innerHTML = totalRevenue > 0
+          ? `<span><strong>${ranked.length.toLocaleString()}</strong> companies with revenue</span>
+             <span>Top ${named.length} account${named.length === 1 ? '' : 's'}: <strong>${formatPercent(namedShare)}</strong> of mix</span>
+             <span>Total mix: <strong>${formatCurrency(totalRevenue)}</strong></span>`
+          : '';
+      }
+
+      if (!tbody) return;
+      if (mixRows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="no-data">No company revenue in this date range</td></tr>';
+        return;
+      }
 
       const colors = [
         '#008060', '#0066cc', '#d946ef', '#ea580c',
         '#facc15', '#ec4899', '#8b5cf6', '#06b6d4',
+        '#65a30d', '#0891b2', '#c026d3', '#f97316',
+        '#4f46e5', '#db2777', '#0d9488', '#94a3b8',
       ];
 
+      let cumulative = 0;
+      tbody.innerHTML = mixRows.map((row, index) => {
+        const share = totalRevenue > 0 ? (row.revenue / totalRevenue) * 100 : 0;
+        cumulative += share;
+        const color = colors[index % colors.length];
+        return `
+          <tr class="${row.isOthers ? 'mix-others' : ''}">
+            <td>
+              <span class="mix-swatch" style="background:${color}"></span>${escapeHtml(row.name)}
+              <span class="mix-bar"><span style="width:${Math.min(share, 100)}%;background:${color}"></span></span>
+            </td>
+            <td class="num">${formatCurrency(row.revenue)}</td>
+            <td class="num">${formatPercent(share)}</td>
+            <td class="num">${row.orders ? formatNumber(row.orders) : '—'}</td>
+            <td class="num">${row.avgOrder ? formatCurrency(row.avgOrder) : '—'}</td>
+            <td class="num">${formatPercent(Math.min(cumulative, 100))}</td>
+          </tr>
+        `;
+      }).join('');
+
+      if (!ctx || typeof Chart !== 'function') return;
+
       charts.revenueMix = new Chart(ctx, {
-        type: 'pie',
+        type: 'doughnut',
         data: {
-          labels,
+          labels: mixRows.map((row) => row.name),
           datasets: [
             {
-              data,
-              backgroundColor: colors,
+              data: mixRows.map((row) => row.revenue),
+              backgroundColor: mixRows.map((_, index) => colors[index % colors.length]),
               borderColor: 'white',
               borderWidth: 2,
             },
@@ -1057,7 +1252,16 @@
           responsive: true,
           maintainAspectRatio: false,
           plugins: {
-            legend: { position: 'right' },
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  const value = context.parsed || 0;
+                  const share = totalRevenue > 0 ? (value / totalRevenue) * 100 : 0;
+                  return ` ${formatCurrency(value)} (${formatPercent(share)})`;
+                },
+              },
+            },
           },
         },
       });
