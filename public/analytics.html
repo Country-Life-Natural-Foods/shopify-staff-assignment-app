@@ -664,15 +664,14 @@
               <tr>
                 <th>Company</th>
                 <th class="num">Revenue</th>
-                <th class="num">Share</th>
+                <th class="num">Pie share</th>
                 <th class="num">Orders</th>
                 <th class="num">Avg order</th>
-                <th class="num">Cumulative</th>
               </tr>
             </thead>
             <tbody id="revenueMixTableBody">
               <tr>
-                <td colspan="6" class="no-data">Loading revenue mix…</td>
+                <td colspan="5" class="no-data">Loading revenue mix…</td>
               </tr>
             </tbody>
           </table>
@@ -1425,7 +1424,7 @@
 
       if (!tbody) return;
       if (mixRows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="no-data">No company revenue in this date range</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="no-data">No company revenue in this date range</td></tr>';
         return;
       }
 
@@ -1436,10 +1435,8 @@
         '#4f46e5', '#db2777', '#0d9488', '#94a3b8',
       ];
 
-      let cumulative = 0;
       tbody.innerHTML = mixRows.map((row, index) => {
         const share = totalRevenue > 0 ? (row.revenue / totalRevenue) * 100 : 0;
-        cumulative += share;
         const color = colors[index % colors.length];
         return `
           <tr class="${row.isOthers ? 'mix-others' : ''}">
@@ -1451,7 +1448,6 @@
             <td class="num">${formatPercent(share)}</td>
             <td class="num">${row.orders ? formatNumber(row.orders) : '—'}</td>
             <td class="num">${row.avgOrder ? formatCurrency(row.avgOrder) : '—'}</td>
-            <td class="num">${formatPercent(Math.min(cumulative, 100))}</td>
           </tr>
         `;
       }).join('');
