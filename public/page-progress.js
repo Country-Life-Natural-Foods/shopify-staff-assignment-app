@@ -14,9 +14,13 @@
       right: 0;
       z-index: 80;
       pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
     #${ROOT_ID}[hidden] { display: none !important; }
     #${ROOT_ID} .page-progress-track {
+      width: 100%;
       height: 3px;
       background: rgba(0, 128, 96, 0.12);
     }
@@ -44,7 +48,7 @@
       line-height: 1.3;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
     }
-    #${ROOT_ID}.is-active .page-progress-label { display: inline-flex; }
+    #${ROOT_ID}.is-active .page-progress-label { display: flex; }
     #${ROOT_ID} .page-progress-spinner {
       width: 10px;
       height: 10px;
@@ -213,6 +217,14 @@
         done: Math.round(pct),
         total: 100,
         label: msg.label || 'Loading companies',
+      });
+      return;
+    }
+    if (msg.phase === 'rollup') {
+      pageProgress.set({
+        done: Math.min(40, 15 + Math.round((msg.done || 0) % 200) / 8),
+        total: 100,
+        label: msg.label || 'Building order rollup',
       });
       return;
     }

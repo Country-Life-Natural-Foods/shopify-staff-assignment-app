@@ -1,6 +1,6 @@
 # Neon setup for Shopify Staff Assignment App (Vercel)
 
-This app only needs Neon to **remember OAuth login** on Vercel. The map sync button does not use the database for map data.
+Neon stores OAuth sessions, the staff roster, and B2B order rollups (`company_metric_day` / `company_metric_order`). Tables are created on first use. The map sync button still reads Shopify metaobjects, not Neon.
 
 ## Neon CLI (project-local)
 

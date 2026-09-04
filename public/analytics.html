@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Analytics Dashboard</title>
+  <script src="https://cdn.shopify.com/shopifycloud/polaris.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     * {
@@ -34,6 +36,12 @@
 
     h1 {
       font-size: 28px;
+      margin-bottom: 8px;
+    }
+
+    .data-source {
+      font-size: 13px;
+      color: #6d7175;
       margin-bottom: 20px;
     }
 
@@ -256,12 +264,106 @@
       padding: 30px;
       color: #6d7175;
     }
+
+    .top-nav {
+      height: 64px;
+      border-bottom: 1px solid #e4e4e7;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 40;
+    }
+
+    .top-nav a.back-link {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: #f4f4f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #52525b;
+      text-decoration: none;
+    }
+
+    .top-nav a.back-link:hover {
+      background: #e4e4e7;
+    }
+
+    .top-nav .nav-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: #008060;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+
+    .top-nav .nav-title {
+      font-weight: 700;
+      font-size: 18px;
+    }
+
+    .top-nav .nav-actions {
+      margin-left: auto;
+      display: flex;
+      gap: 8px;
+    }
+
+    .top-nav a.nav-page-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      border: 1px solid #e4e4e7;
+      border-radius: 6px;
+      color: #3f3f46;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .top-nav a.nav-page-link:hover {
+      background: #fafafa;
+    }
+
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      font-size: 18px;
+    }
   </style>
 </head>
 <body>
+  <s-app-nav>
+    <s-link href="/">Dashboard</s-link>
+    <s-link href="/analytics">Analytics</s-link>
+    <s-link href="/reports">Reports</s-link>
+  </s-app-nav>
+  <nav class="top-nav">
+    <a href="/" id="back-link" class="back-link" aria-label="Back to dashboard">
+      <span class="material-symbols-outlined">arrow_back</span>
+    </a>
+    <div class="nav-icon">
+      <span class="material-symbols-outlined">monitoring</span>
+    </div>
+    <span class="nav-title">Analytics</span>
+    <div class="nav-actions">
+      <a id="reports-link" href="/reports" class="nav-page-link">
+        <span class="material-symbols-outlined">summarize</span>
+        Reports
+      </a>
+    </div>
+  </nav>
   <div class="container">
     <header>
-      <h1>Analytics Dashboard</h1>
+      <h1>Wholesale performance</h1>
+      <p id="data-source" class="data-source">Loading date-range metrics…</p>
       <div class="date-filter">
         <div class="date-input-group">
           <label for="startDate">Start Date</label>
@@ -395,12 +497,28 @@
     </div>
   </div>
 
+  <script type="module" src="/shopify-session-bootstrap.js"></script>
+  <script src="/page-progress.js"></script>
   <script>
     // ==================== CONFIGURATION ====================
     const config = {
       API_BASE: '/api/analytics',
       DEFAULT_DATE_RANGE_DAYS: 90,
     };
+
+    function apiUrl(path) {
+      const params = new URLSearchParams(window.location.search);
+      const shop = params.get('shop');
+      const host = params.get('host');
+      const q = new URLSearchParams();
+      if (shop) q.set('shop', shop);
+      if (host) q.set('host', host);
+      const qs = q.toString();
+      return qs ? `${path}${path.includes('?') ? '&' : '?'}${qs}` : path;
+    }
+
+    document.getElementById('back-link').href = apiUrl('/');
+    document.getElementById('reports-link').href = apiUrl('/reports');
 
     // Chart instances storage
     const charts = {
@@ -411,14 +529,21 @@
     };
 
     // ==================== DATE UTILITIES ====================
+    function formatLocalDate(date) {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
     function getDefaultDateRange() {
       const endDate = new Date();
       const startDate = new Date(endDate);
       startDate.setDate(startDate.getDate() - config.DEFAULT_DATE_RANGE_DAYS);
 
       return {
-        startDate: startDate.toISOString().split('T')[0],
-        endDate: endDate.toISOString().split('T')[0],
+        startDate: formatLocalDate(startDate),
+        endDate: formatLocalDate(endDate),
       };
     }
 
@@ -443,8 +568,8 @@
       }
 
       return {
-        startDate: new Date(startDate).toISOString(),
-        endDate: new Date(endDate).toISOString(),
+        startDate: `${startDate}T00:00:00.000Z`,
+        endDate: `${endDate}T23:59:59.999Z`,
       };
     }
 
@@ -475,18 +600,37 @@
       const url = new URL(endpoint, window.location.origin);
       url.searchParams.append('startDate', dateParams.startDate);
       url.searchParams.append('endDate', dateParams.endDate);
+      const pageParams = new URLSearchParams(window.location.search);
+      if (pageParams.get('shop')) url.searchParams.set('shop', pageParams.get('shop'));
+      if (pageParams.get('host')) url.searchParams.set('host', pageParams.get('host'));
 
-      const response = await fetch(url);
+      const fetchFn = window.shopifyApiFetch || fetch;
+      const response = await fetchFn(url.toString(), { credentials: 'same-origin' });
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        throw new Error(data.error || `HTTP ${response.status}: ${response.statusText}`);
       }
-      return await response.json();
+      return data;
+    }
+
+    function noteDataSource(data) {
+      const el = document.getElementById('data-source');
+      if (!el || !data) return;
+      if (data.source === 'rollup') {
+        el.textContent = 'Numbers are from the order rollup for the selected dates.';
+      } else if (data.source === 'shopify' && !el.dataset.rollup) {
+        el.textContent = 'Still paging Shopify for this range. The rollup will take over after backfill finishes.';
+      }
+      if (data.source === 'rollup') el.dataset.rollup = '1';
     }
 
     async function fetchAnalyticsSummary() {
       try {
         const data = await fetchWithDateRange(config.API_BASE + '/summary');
-        if (data && data.summary) updateKPICards(data.summary);
+        if (data && data.summary) {
+          noteDataSource(data);
+          updateKPICards(data.summary);
+        }
       } catch (error) {
         handleApiError(error, 'analytics summary');
       }
@@ -495,7 +639,10 @@
     async function fetchRevenueTrend() {
       try {
         const data = await fetchWithDateRange(config.API_BASE + '/revenue-trend?period=daily');
-        if (data && data.trends) renderRevenueTrendChart(data.trends);
+        if (data && data.trends) {
+          noteDataSource(data);
+          renderRevenueTrendChart(data.trends);
+        }
       } catch (error) {
         handleApiError(error, 'revenue trend');
       }
@@ -505,6 +652,7 @@
       try {
         const data = await fetchWithDateRange(config.API_BASE + '/companies?sortBy=revenue&sortOrder=desc');
         if (data) {
+          noteDataSource(data);
           renderCompaniesTable(data.companies || []);
           renderCompaniesByRevenueChart(data.companies || []);
           renderRevenueMixChart(data.companies || []);
@@ -518,6 +666,7 @@
       try {
         const data = await fetchWithDateRange(config.API_BASE + '/products');
         if (data) {
+          noteDataSource(data);
           renderProductsTable(data.products || []);
           renderTopProductsChart(data.products || []);
         }
@@ -536,8 +685,25 @@
         url.searchParams.append('dataType', 'companies');
         url.searchParams.append('startDate', dateParams.startDate);
         url.searchParams.append('endDate', dateParams.endDate);
+        const pageParams = new URLSearchParams(window.location.search);
+        if (pageParams.get('shop')) url.searchParams.set('shop', pageParams.get('shop'));
+        if (pageParams.get('host')) url.searchParams.set('host', pageParams.get('host'));
 
-        window.location.href = url.toString();
+        const fetchFn = window.shopifyApiFetch || fetch;
+        const response = await fetchFn(url.toString(), { credentials: 'same-origin' });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        const blob = await response.blob();
+        const downloadUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = `analytics-companies.${format === 'json' ? 'json' : 'csv'}`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(downloadUrl);
       } catch (error) {
         handleApiError(error, 'data export');
       }
@@ -621,7 +787,7 @@
       destroyChart(charts.revenueTrend);
 
       const ctx = document.getElementById('revenueTrendChart');
-      if (!ctx) return;
+      if (!ctx || typeof Chart !== 'function') return;
 
       const labels = trends.map(t => {
         const date = new Date(t.date);
@@ -683,7 +849,7 @@
       destroyChart(charts.companiesByRevenue);
 
       const ctx = document.getElementById('companiesByRevenueChart');
-      if (!ctx) return;
+      if (!ctx || typeof Chart !== 'function') return;
 
       // Sort by revenue and take top 10
       const topCompanies = companies
@@ -724,7 +890,7 @@
       destroyChart(charts.topProducts);
 
       const ctx = document.getElementById('topProductsChart');
-      if (!ctx) return;
+      if (!ctx || typeof Chart !== 'function') return;
 
       if (!products || products.length === 0) {
         ctx.getContext('2d').fillText('No data', 10, 10);
@@ -792,7 +958,7 @@
       destroyChart(charts.revenueMix);
 
       const ctx = document.getElementById('revenueMixChart');
-      if (!ctx) return;
+      if (!ctx || typeof Chart !== 'function') return;
 
       // Sort by revenue and take top 8
       const topCompanies = companies
@@ -869,8 +1035,8 @@
           <tr>
             <td>${escapeHtml(product.title || 'N/A')}</td>
             <td>${formatCurrency(product.revenue || 0, product.currencyCode || 'USD')}</td>
-            <td>${formatNumber(product.unitsSold || product.quantity || 0)}</td>
-            <td>${(product.unitsSold || product.quantity) && (product.unitsSold || product.quantity) > 0 ? ((product.revenue || 0) / (product.unitsSold || product.quantity)).toFixed(2) : 0}</td>
+            <td>${formatNumber(product.quantitySold || product.unitsSold || product.quantity || 0)}</td>
+            <td>${(product.quantitySold || product.unitsSold || product.quantity) && (product.quantitySold || product.unitsSold || product.quantity) > 0 ? ((product.revenue || 0) / (product.quantitySold || product.unitsSold || product.quantity)).toFixed(2) : 0}</td>
           </tr>
         `).join('');
       } else {
@@ -895,17 +1061,31 @@
     // ==================== REFRESH ALL ====================
     async function refreshAllData() {
       document.getElementById('applyFilter').disabled = true;
+      const sourceEl = document.getElementById('data-source');
+      if (sourceEl) {
+        delete sourceEl.dataset.rollup;
+        sourceEl.textContent = 'Loading date-range metrics…';
+      }
+      if (window.pageProgress) {
+        window.pageProgress.begin({ total: 4, label: 'Loading analytics' });
+      }
 
       try {
-        await Promise.all([
-          fetchAnalyticsSummary(),
-          fetchRevenueTrend(),
-          fetchCompaniesAnalytics(),
-          fetchProductsAnalytics(),
-        ]);
+        const tasks = [
+          ['Summary', fetchAnalyticsSummary],
+          ['Revenue trend', fetchRevenueTrend],
+          ['Companies', fetchCompaniesAnalytics],
+          ['Products', fetchProductsAnalytics],
+        ];
+        await Promise.all(tasks.map(async ([label, fn]) => {
+          await fn();
+          if (window.pageProgress) window.pageProgress.advance(label);
+        }));
+        if (window.pageProgress) window.pageProgress.finish();
       } catch (error) {
         console.error('Error refreshing data:', error);
         showError('Failed to refresh analytics data');
+        if (window.pageProgress) window.pageProgress.fail();
       } finally {
         document.getElementById('applyFilter').disabled = false;
       }
@@ -921,12 +1101,14 @@
       refreshAllData();
     }
 
-    // Start loading when page loads
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', initialize);
-    } else {
+    let analyticsStarted = false;
+    function startAnalyticsOnce() {
+      if (analyticsStarted) return;
+      analyticsStarted = true;
       initialize();
     }
+    window.addEventListener('shopify:api-fetch-ready', startAnalyticsOnce, { once: true });
+    setTimeout(startAnalyticsOnce, 2500);
   </script>
 </body>
 </html>

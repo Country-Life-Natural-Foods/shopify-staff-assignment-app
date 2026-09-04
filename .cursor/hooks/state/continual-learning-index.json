@@ -1,13 +1,25 @@
 ﻿{
-    "indexed_at":  "2026-05-02T16:54:22.7932984+00:00",
-    "transcripts":  {
-                        "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/1c406c1b-7a34-4215-8b48-50e32c992bbc/1c406c1b-7a34-4215-8b48-50e32c992bbc.jsonl":  "2026-05-02T02:46:08.4869017Z",
-                        "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/a60dbc26-cfe6-4988-a991-9d0a30d7cd79/a60dbc26-cfe6-4988-a991-9d0a30d7cd79.jsonl":  "2026-05-02T01:37:17.8818000Z",
-                        "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/955c1965-45c8-4d77-abe9-1981e24dc7c1/955c1965-45c8-4d77-abe9-1981e24dc7c1.jsonl":  "2026-05-02T16:49:50.0084323Z",
-                        "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/cd8a451e-bf92-4dd9-8493-70edebe514d2/cd8a451e-bf92-4dd9-8493-70edebe514d2.jsonl":  "2026-05-02T01:36:00.7821214Z",
-                        "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/cdd1b961-43f3-4d06-8618-23fb64c62e8d/cdd1b961-43f3-4d06-8618-23fb64c62e8d.jsonl":  "2026-05-02T01:52:44.1471430Z",
-                        "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/89bdf158-1edd-4b82-b9d2-c373d20bff3f/89bdf158-1edd-4b82-b9d2-c373d20bff3f.jsonl":  "2026-05-02T02:37:48.5080059Z",
-                        "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/dc625abf-9154-4365-b6f8-2c8e379a662b/dc625abf-9154-4365-b6f8-2c8e379a662b.jsonl":  "2026-05-02T02:53:06.8740136Z",
-                        "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/6a311e84-46d5-45e5-8035-c6fa6516d9f7/6a311e84-46d5-45e5-8035-c6fa6516d9f7.jsonl":  "2026-05-02T02:43:55.0028283Z"
-                    }
+  "indexed_at": "2026-09-04T00:45:00.0000000+00:00",
+  "transcripts": {
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/0525d767-674d-4bc4-98c7-08cbddd8f1a3/0525d767-674d-4bc4-98c7-08cbddd8f1a3.jsonl": "2026-05-15T04:44:02.5617462Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/0bbff63b-be4a-4f23-be49-e0fc77fba101/0bbff63b-be4a-4f23-be49-e0fc77fba101.jsonl": "2026-09-04T00:43:59.6205515Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/0bbff63b-be4a-4f23-be49-e0fc77fba101/subagents/590c4859-45a3-4d37-9541-8af44448219c.jsonl": "2026-09-04T00:44:21.2066809Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/1c406c1b-7a34-4215-8b48-50e32c992bbc/1c406c1b-7a34-4215-8b48-50e32c992bbc.jsonl": "2026-05-02T02:46:08.4869017Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/2669c256-01da-4603-8261-d56a0d42bbe6/2669c256-01da-4603-8261-d56a0d42bbe6.jsonl": "2026-05-20T02:11:38.2069685Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/2ba9ca8c-63e0-4fb0-9a77-f091c377c41b/2ba9ca8c-63e0-4fb0-9a77-f091c377c41b.jsonl": "2026-05-15T04:47:32.1779384Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/6a311e84-46d5-45e5-8035-c6fa6516d9f7/6a311e84-46d5-45e5-8035-c6fa6516d9f7.jsonl": "2026-05-02T02:43:55.0028283Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/6a311e84-46d5-45e5-8035-c6fa6516d9f7/subagents/dc41fd7f-5fbd-4483-b9d7-810b44298f40.jsonl": "2026-05-02T02:30:13.0156831Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/7117915f-424b-4e2d-a29a-8e5663a582bb/7117915f-424b-4e2d-a29a-8e5663a582bb.jsonl": "2026-08-28T04:15:49.0424408Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/89bdf158-1edd-4b82-b9d2-c373d20bff3f/89bdf158-1edd-4b82-b9d2-c373d20bff3f.jsonl": "2026-05-02T02:37:48.5080059Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/9003c56c-cf94-4310-b12c-c8148a2bf852/9003c56c-cf94-4310-b12c-c8148a2bf852.jsonl": "2026-09-04T00:43:10.0549524Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/92b61f72-c35c-40cb-aefe-b3273da5ac9c/92b61f72-c35c-40cb-aefe-b3273da5ac9c.jsonl": "2026-05-20T00:49:58.4922636Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/955c1965-45c8-4d77-abe9-1981e24dc7c1/955c1965-45c8-4d77-abe9-1981e24dc7c1.jsonl": "2026-05-02T16:54:52.2749346Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/955c1965-45c8-4d77-abe9-1981e24dc7c1/subagents/c39d44e6-635d-4a82-bb2f-df8e3ab34607.jsonl": "2026-05-02T16:50:40.0980918Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/a60dbc26-cfe6-4988-a991-9d0a30d7cd79/a60dbc26-cfe6-4988-a991-9d0a30d7cd79.jsonl": "2026-05-02T01:37:17.8818000Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/acb0fd3d-f38e-4e4a-981a-5787e447eb05/acb0fd3d-f38e-4e4a-981a-5787e447eb05.jsonl": "2026-08-30T18:49:14.5528143Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/b00ad174-2a41-4bdc-b809-178ba93c4d51/b00ad174-2a41-4bdc-b809-178ba93c4d51.jsonl": "2026-08-28T01:19:44.6105693Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/cd8a451e-bf92-4dd9-8493-70edebe514d2/cd8a451e-bf92-4dd9-8493-70edebe514d2.jsonl": "2026-05-02T01:36:00.7821214Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/cdd1b961-43f3-4d06-8618-23fb64c62e8d/cdd1b961-43f3-4d06-8618-23fb64c62e8d.jsonl": "2026-05-02T01:52:44.1471430Z",
+    "C:/Users/Owner/.cursor/projects/c-Users-Owner-Desktop-Development-shopify-staff-assignment-app/agent-transcripts/dc625abf-9154-4365-b6f8-2c8e379a662b/dc625abf-9154-4365-b6f8-2c8e379a662b.jsonl": "2026-05-02T02:53:06.8740136Z"
+  }
 }

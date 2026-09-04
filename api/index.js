@@ -30,6 +30,7 @@ require('@shopify/shopify-api/adapters/node');
 const {
   Session,
   ApiVersion,
+  DeliveryMethod,
   GraphqlQueryError,
   HttpResponseError,
 } = require('@shopify/shopify-api');
@@ -40,6 +41,7 @@ const {
 } = require('../lib/resolve-shopify-hostname');
 const { configureSessionStorage } = require('../lib/configure-session-storage');
 const { configureStaffStore } = require('../lib/staff-store');
+const { configureCompanyMetrics } = require('../lib/company-metrics');
 const { shopifyGraphql } = require('../lib/shopify-gql');
 
 applyShopifyDeploymentEnv();
@@ -203,8 +205,22 @@ app.use(helmet({
 app.use(cors());
 app.use(cookieParser());
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+function isShopifyWebhookRequest(req) {
+  const path = req.path || '';
+  const url = req.originalUrl || req.url || '';
+  return path === '/webhooks' || url.split('?')[0] === '/webhooks';
+}
+
+// Shopify HMAC validation needs the raw webhook body. express.json() would
+// consume the stream first and break /webhooks.
+app.use((req, res, next) => {
+  if (isShopifyWebhookRequest(req)) return next();
+  express.json()(req, res, next);
+});
+app.use((req, res, next) => {
+  if (isShopifyWebhookRequest(req)) return next();
+  express.urlencoded({ extended: true })(req, res, next);
+});
 
 // Request logging middleware for debugging and monitoring
 app.use((req, res, next) => {
@@ -241,10 +257,12 @@ const REQUEST_TIMEOUT_MS = 20000;
 const COMMISSION_AGGREGATION_TIMEOUT_MS = 55000;
 
 function isCommissionAggregationRequest(req) {
-  if (req.method !== 'GET') return false;
   const p = req.path || '';
+  if (req.method === 'POST' && p === '/api/metrics/backfill') return true;
+  if (req.method !== 'GET') return false;
   if (p === '/api/commissions') return true;
   if (p === '/api/reports/commissions' || p === '/api/reports/commissions/export.csv') return true;
+  if (p.startsWith('/api/analytics')) return true;
   return (
     p.startsWith('/api/commissions/') &&
     p !== '/api/commissions/access' &&
@@ -342,14 +360,11 @@ app.get(
   shopifyAppInstance.auth.callback(),
   shopifyAppInstance.redirectToShopifyOrAppRoot(),
 );
-app.post(
-  shopifyAppInstance.config.webhooks.path,
-  ...shopifyAppInstance.processWebhooks({ webhookHandlers: {} }),
-);
 
 // Routes (before static — do not let express.static answer `/` with public/index.html; we inject App Bridge meta)
 app.get('/test-ui', (req, res) => sendAppHtmlFile(res, 'index.html'));
 app.get('/test-ui/reports', (req, res) => sendAppHtmlFile(res, 'reports.html'));
+app.get('/test-ui/analytics', (req, res) => sendAppHtmlFile(res, 'analytics.html'));
 
 function sendAppPage(filename) {
   return (req, res) => {
@@ -421,22 +436,65 @@ app.get(
   sendAppPage(process.env.APP_HOME_HTML || 'index.html'),
 );
 app.get('/reports', ensureInstalledOnShop, shopifyCspHeaders, sendAppPage('reports.html'));
+app.get('/analytics', ensureInstalledOnShop, shopifyCspHeaders, sendAppPage('analytics.html'));
 
-// Health check
-app.get('/api/health', (req, res) => {
+const staffStore = configureStaffStore({ isProduction });
+
+const companyMetrics = configureCompanyMetrics({
+  isProduction,
+  getOfflineGraphqlClient: async (shopDomain) => {
+    if (typeof shopifySessionStorage.findSessionsByShop !== 'function') return null;
+    const sessions = await shopifySessionStorage.findSessionsByShop(shopDomain);
+    const session = (sessions || []).find((s) => s?.accessToken && !s.isOnline)
+      || (sessions || []).find((s) => s?.accessToken);
+    if (!session) return null;
+    return new shopify.clients.Graphql({ session });
+  },
+});
+
+function orderWebhookHandler() {
+  return {
+    deliveryMethod: DeliveryMethod.Http,
+    callbackUrl: shopifyAppInstance.config.webhooks.path,
+    callback: async (_topic, shop, body) => {
+      const payload = typeof body === 'string' ? JSON.parse(body) : body;
+      const result = await companyMetrics.ingestWebhook(shop, payload);
+      if (result.applied) commissionCache.clear(shop);
+    },
+  };
+}
+
+app.post(
+  shopifyAppInstance.config.webhooks.path,
+  ...shopifyAppInstance.processWebhooks({
+    webhookHandlers: {
+      ORDERS_CREATE: orderWebhookHandler(),
+      ORDERS_UPDATED: orderWebhookHandler(),
+      ORDERS_CANCELLED: orderWebhookHandler(),
+    },
+  }),
+);
+
+app.get('/api/health', async (req, res) => {
+  const shop = String(req.query.shop || '').trim();
+  let orderRollup = { enabled: companyMetrics.enabled, ready: false, status: companyMetrics.enabled ? 'unknown' : 'disabled' };
+  if (companyMetrics.enabled && shop) {
+    orderRollup = await companyMetrics.status(shop);
+  } else if (companyMetrics.enabled) {
+    orderRollup = { enabled: true, ready: false, status: 'pending' };
+  }
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     hostName,
     sessionStorage: sessionBackend,
     persistentSessions: hasPersistentStorage,
+    orderRollup,
     warning: isProduction && !hasPersistentStorage
       ? 'Set REDIS_URL (Upstash) or DATABASE_URL (Neon/Supabase Postgres) for production sessions.'
       : undefined,
   });
 });
-
-const staffStore = configureStaffStore({ isProduction });
 
 // Decode the App Bridge session token (already required by validateAuthenticatedSession)
 // to get a stable per-user Shopify ID. Offline sessions carry no per-user info, so this
@@ -960,7 +1018,39 @@ const fetchCompanyRevenueSince = async (client, companyId, sinceIso, untilIso = 
   return { totalSpend, orderCount, lastOrderDate };
 };
 
+function shopFromClient(client) {
+  return client?.session?.shop || null;
+}
+
 async function fetchCompaniesRevenueSince(client, jobs, onProgress) {
+  const shop = shopFromClient(client);
+  if (companyMetrics.enabled && shop && jobs.length) {
+    try {
+      if (!(await companyMetrics.isReady(shop))) {
+        await companyMetrics.backfillChunk(shop, client, {
+          maxPages: 8,
+          maxMs: 18000,
+          onProgress: typeof onProgress === 'function'
+            ? (p) => onProgress({ ...p, phase: 'rollup' })
+            : undefined,
+        });
+      }
+      if (await companyMetrics.isReady(shop)) {
+        const sums = await companyMetrics.sumJobs(shop, jobs);
+        if (typeof onProgress === 'function') {
+          onProgress({ phase: 'revenue', done: jobs.length, total: jobs.length });
+        }
+        return jobs.map((job) => sums.get(job.companyId) || {
+          totalSpend: 0,
+          orderCount: 0,
+          lastOrderDate: null,
+        });
+      }
+    } catch (err) {
+      console.error('[company-metrics] rollup read failed, using Shopify', err);
+    }
+  }
+
   let completed = 0;
   return mapWithConcurrency(jobs, COMMISSION_SHOPIFY_CONCURRENCY, async (job) => {
     const result = await fetchCompanyRevenueSince(
@@ -1696,6 +1786,11 @@ async function buildCommissionReport(req, res, monthParam, onProgress) {
     { totalRevenue: 0, totalCommission: 0 },
   );
 
+  const shop = shopFromClient(client);
+  const rollup = shop && companyMetrics.enabled
+    ? await companyMetrics.status(shop)
+    : { enabled: false, ready: false, status: 'disabled' };
+
   return {
     status: 200,
     period: {
@@ -1706,6 +1801,8 @@ async function buildCommissionReport(req, res, monthParam, onProgress) {
     },
     reps,
     totals,
+    source: rollup.ready ? 'rollup' : 'shopify',
+    rollup,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -1922,9 +2019,14 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
     // Sort by total commission descending
     commissions.sort((a, b) => b.totalCommission - a.totalCommission);
 
+    const rollup = shopId !== 'unknown' && companyMetrics.enabled
+      ? await companyMetrics.status(shopId)
+      : { enabled: false, ready: false, status: 'disabled' };
     const payload = {
       commissions,
       isManager: isUserManager,
+      source: rollup.ready ? 'rollup' : 'shopify',
+      rollup,
       generatedAt: new Date().toISOString()
     };
 
@@ -2127,6 +2229,11 @@ const {
   getCompanyAnalytics,
   getProductsAnalytics,
   getRevenueTrend,
+  fetchCompaniesDirectory,
+  fetchCompanyProfile,
+  fetchCompaniesCount,
+  mergeCompaniesWithRange,
+  sortCompanyAnalytics,
 } = require('../lib/analytics-data');
 
 /**
@@ -2205,24 +2312,6 @@ function validateISODate(value) {
   }
 }
 
-// GET /analytics - Serve analytics HTML page
-/**
- * GET /analytics
- * Serves the analytics dashboard HTML page
- *
- * @route GET /analytics
- * @returns {html} Analytics dashboard HTML
- * @throws {500} Internal server error
- */
-app.get('/analytics', ensureInstalledOnShop, shopifyCspHeaders, (req, res) => {
-  try {
-    sendAppHtmlFile(res, 'analytics.html');
-  } catch (error) {
-    console.error('Error loading analytics page:', error);
-    res.status(500).send('Internal server error');
-  }
-});
-
 // GET /api/analytics/summary - Overall analytics summary
 /**
  * GET /api/analytics/summary
@@ -2240,6 +2329,194 @@ app.get('/analytics', ensureInstalledOnShop, shopifyCspHeaders, (req, res) => {
  * @throws {503} Request timeout
  * @throws {500} Internal server error
  */
+async function ensureRollupReady(client, { products } = {}) {
+  const shop = shopFromClient(client);
+  if (!companyMetrics.enabled || !shop) {
+    return { shop, ready: false, productsReady: false };
+  }
+  try {
+    if (!(await companyMetrics.isReady(shop))) {
+      await companyMetrics.backfillChunk(shop, client, { maxPages: 8, maxMs: 18000 });
+    }
+    const ready = await companyMetrics.isReady(shop);
+    if (products && ready && !(await companyMetrics.isProductsReady(shop))) {
+      await companyMetrics.backfillProductChunk(shop, client, { maxPages: 6, maxMs: 18000 });
+    }
+    return {
+      shop,
+      ready,
+      productsReady: ready && (await companyMetrics.isProductsReady(shop)),
+    };
+  } catch (err) {
+    console.error('[company-metrics] analytics rollup ensure failed', err);
+    return { shop, ready: false, productsReady: false };
+  }
+}
+
+async function buildRollupSummary(client, shop, startDate, endDate, { productsReady } = {}) {
+  const [totals, days, totalCompanies, products] = await Promise.all([
+    companyMetrics.shopRangeTotals(shop, startDate, endDate),
+    companyMetrics.revenueByDay(
+      shop,
+      startDate ? startDate.slice(0, 10) : null,
+      endDate ? endDate.slice(0, 10) : null,
+    ),
+    fetchCompaniesCount(client),
+    productsReady ? companyMetrics.productsRange(shop, startDate, endDate) : Promise.resolve([]),
+  ]);
+  const top = products[0] || null;
+  return {
+    summary: {
+      revenue: totals.revenue,
+      orders: totals.orderCount,
+      activeCompanies: totals.activeCompanies,
+      totalCompanies,
+      currencyCode: 'USD',
+      avgOrderValue: totals.orderCount > 0
+        ? parseFloat((totals.revenue / totals.orderCount).toFixed(2))
+        : 0,
+      topProduct: top
+        ? {
+          id: top.id,
+          title: top.title,
+          revenue: top.revenue,
+          quantity: top.unitsSold || top.quantitySold || 0,
+        }
+        : null,
+    },
+    trend: trendFromRollupDays(days, 'daily'),
+    generatedAt: new Date().toISOString(),
+    truncated: { companies: false, orders: false },
+    source: 'rollup',
+  };
+}
+
+async function buildRollupCompanies(client, shop, options = {}) {
+  const { sortBy = 'revenue', sortOrder = 'desc', maxPages = 20, startDate = null, endDate = null } = options;
+  const [directory, rangeMap] = await Promise.all([
+    fetchCompaniesDirectory(client, maxPages),
+    companyMetrics.companiesRange(shop, startDate, endDate),
+  ]);
+  const companies = sortCompanyAnalytics(
+    mergeCompaniesWithRange(directory.nodes, rangeMap),
+    sortBy,
+    sortOrder,
+  );
+  return {
+    companies,
+    totalCount: companies.length,
+    truncated: directory.truncated,
+    generatedAt: new Date().toISOString(),
+    source: 'rollup',
+  };
+}
+
+async function buildRollupCompanyDetail(client, shop, companyId, startDate, endDate) {
+  const [profile, metrics] = await Promise.all([
+    fetchCompanyProfile(client, companyId),
+    companyMetrics.companyRange(shop, companyId, startDate, endDate),
+  ]);
+  if (!profile) return null;
+  return {
+    id: profile.id,
+    name: profile.name,
+    externalId: profile.externalId || null,
+    createdAt: profile.createdAt,
+    customerSince: profile.customerSince,
+    totalSpent: metrics.revenue,
+    ordersCount: metrics.orderCount,
+    lastOrderDate: metrics.lastOrderDate,
+    daysSinceLastOrder: metrics.daysSinceLastOrder,
+    avgOrderValue: metrics.orderCount > 0
+      ? parseFloat((metrics.revenue / metrics.orderCount).toFixed(2))
+      : 0,
+    currency: 'USD',
+    contactCount: profile.contacts?.edges?.length || 0,
+    orderTrend: metrics.days,
+    generatedAt: new Date().toISOString(),
+    source: 'rollup',
+  };
+}
+
+function buildRollupProducts(products) {
+  return {
+    products,
+    generatedAt: new Date().toISOString(),
+    truncated: false,
+    source: 'rollup',
+  };
+}
+
+function trendFromRollupDays(rows, period) {
+  const trends = new Map();
+  let totalRevenue = 0;
+  for (const row of rows) {
+    const orderDate = new Date(`${row.date}T00:00:00.000Z`);
+    let key = row.date;
+    if (period === 'weekly' || period === 'week') {
+      const weekStart = new Date(orderDate);
+      weekStart.setUTCDate(orderDate.getUTCDate() - orderDate.getUTCDay());
+      key = weekStart.toISOString().slice(0, 10);
+    } else if (period === 'monthly' || period === 'month') {
+      key = String(row.date).slice(0, 7);
+    }
+    if (!trends.has(key)) trends.set(key, { date: key, revenue: 0, orders: 0 });
+    const bucket = trends.get(key);
+    bucket.revenue += row.revenue;
+    bucket.orders += row.orders;
+    totalRevenue += row.revenue;
+  }
+  return {
+    trends: [...trends.values()]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map((t) => ({
+        date: t.date,
+        revenue: parseFloat(t.revenue.toFixed(2)),
+        orders: t.orders,
+      })),
+    totalRevenue: parseFloat(totalRevenue.toFixed(2)),
+    currencyCode: 'USD',
+    period,
+    truncated: false,
+    source: 'rollup',
+  };
+}
+
+app.get('/api/metrics/status', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const session = res.locals.shopify?.session;
+    if (!session?.shop) return res.status(401).json({ error: 'Unauthorized' });
+    res.json(await companyMetrics.status(session.shop));
+  } catch (error) {
+    console.error('GET /api/metrics/status', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/metrics/backfill', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const user = await getCurrentUser(req, res);
+    if (!(await isManager(user))) {
+      return res.status(403).json({ error: 'Only managers can rebuild the order rollup.' });
+    }
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+    const shop = shopFromClient(client);
+    if (!companyMetrics.enabled) {
+      return res.status(503).json({ error: 'Postgres is required for order rollups. Set DATABASE_URL.' });
+    }
+    const result = await companyMetrics.backfillChunk(shop, client, {
+      maxPages: 20,
+      maxMs: 45000,
+      rebuild: Boolean(req.body?.rebuild),
+    });
+    res.json(result);
+  } catch (error) {
+    console.error('POST /api/metrics/backfill', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/analytics/summary', validateAuthenticatedSession, async (req, res) => {
   try {
     const client = await getGraphqlClient(req, res);
@@ -2254,7 +2531,15 @@ app.get('/api/analytics/summary', validateAuthenticatedSession, async (req, res)
       return res.status(400).json({ error: 'startDate must be before or equal to endDate' });
     }
 
+    const rollup = await ensureRollupReady(client, { products: true });
+    if (rollup.ready) {
+      return res.json(await buildRollupSummary(client, rollup.shop, startDate, endDate, {
+        productsReady: rollup.productsReady,
+      }));
+    }
+
     const result = await buildAnalyticsSummary(client, startDate, endDate);
+    result.source = 'shopify';
     res.json(result);
   } catch (error) {
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
@@ -2304,7 +2589,21 @@ app.get('/api/analytics/revenue-trend', validateAuthenticatedSession, async (req
       return res.status(400).json({ error: 'startDate must be before or equal to endDate' });
     }
 
+    const rollup = await ensureRollupReady(client);
+    if (rollup.ready) {
+      const days = await companyMetrics.revenueByDay(
+        rollup.shop,
+        startDate ? startDate.slice(0, 10) : null,
+        endDate ? endDate.slice(0, 10) : null,
+      );
+      return res.json({
+        ...trendFromRollupDays(days, period),
+        generatedAt: new Date().toISOString(),
+      });
+    }
+
     const result = await getRevenueTrend(client, { period, maxPages, startDate, endDate });
+    result.source = 'shopify';
     res.json(result);
   } catch (error) {
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
@@ -2354,7 +2653,19 @@ app.get('/api/analytics/companies', validateAuthenticatedSession, async (req, re
       return res.status(400).json({ error: 'startDate must be before or equal to endDate' });
     }
 
+    const rollup = await ensureRollupReady(client);
+    if (rollup.ready) {
+      return res.json(await buildRollupCompanies(client, rollup.shop, {
+        sortBy,
+        sortOrder,
+        maxPages: Math.max(maxPages, 20),
+        startDate,
+        endDate,
+      }));
+    }
+
     const result = await getCompaniesAnalytics(client, { sortBy, sortOrder, maxPages, startDate, endDate });
+    result.source = 'shopify';
     res.json(result);
   } catch (error) {
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
@@ -2411,11 +2722,27 @@ app.get('/api/analytics/companies/:companyId', validateAuthenticatedSession, asy
       return res.status(400).json({ error: 'startDate must be before or equal to endDate' });
     }
 
+    const rollup = await ensureRollupReady(client);
+    if (rollup.ready) {
+      const rollupResult = await buildRollupCompanyDetail(
+        client,
+        rollup.shop,
+        companyId,
+        startDate,
+        endDate,
+      );
+      if (!rollupResult) {
+        return res.status(404).json({ error: 'Company not found', code: 'COMPANY_NOT_FOUND' });
+      }
+      return res.json(rollupResult);
+    }
+
     const result = await getCompanyAnalytics(client, companyId);
     if (!result) {
       return res.status(404).json({ error: 'Company not found', code: 'COMPANY_NOT_FOUND' });
     }
 
+    result.source = 'shopify';
     res.json(result);
   } catch (error) {
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
@@ -2463,7 +2790,14 @@ app.get('/api/analytics/products', validateAuthenticatedSession, async (req, res
       return res.status(400).json({ error: 'startDate must be before or equal to endDate' });
     }
 
-    const result = await getProductsAnalytics(client, { status, maxPages });
+    const rollup = await ensureRollupReady(client, { products: true });
+    if (rollup.productsReady) {
+      const products = await companyMetrics.productsRange(rollup.shop, startDate, endDate);
+      return res.json(buildRollupProducts(products));
+    }
+
+    const result = await getProductsAnalytics(client, { status, maxPages, startDate, endDate });
+    result.source = 'shopify';
     res.json(result);
   } catch (error) {
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
@@ -2516,14 +2850,24 @@ app.get('/api/analytics/export', validateAuthenticatedSession, async (req, res) 
     }
 
     let data;
+    const rollup = await ensureRollupReady(client, { products: dataType !== 'companies' });
 
     if (dataType === 'companies') {
-      data = await getCompaniesAnalytics(client, { maxPages: 20, startDate, endDate });
+      data = rollup.ready
+        ? await buildRollupCompanies(client, rollup.shop, { maxPages: 20, startDate, endDate })
+        : await getCompaniesAnalytics(client, { maxPages: 20, startDate, endDate });
     } else if (dataType === 'products') {
-      data = await getProductsAnalytics(client, { maxPages: 20 });
+      data = rollup.productsReady
+        ? buildRollupProducts(await companyMetrics.productsRange(rollup.shop, startDate, endDate))
+        : await getProductsAnalytics(client, { maxPages: 20, startDate, endDate });
+    } else if (rollup.ready) {
+      data = await buildRollupSummary(client, rollup.shop, startDate, endDate, {
+        productsReady: rollup.productsReady,
+      });
     } else {
       data = await buildAnalyticsSummary(client, startDate, endDate);
     }
+    if (!data.source) data.source = rollup.ready ? 'rollup' : 'shopify';
 
     if (format === 'csv') {
       let csv = '';
@@ -2545,14 +2889,14 @@ app.get('/api/analytics/export', validateAuthenticatedSession, async (req, res) 
         ].map(row => row.map(csvField).join(',')).join('\r\n');
       } else if (dataType === 'products') {
         csv = [
-          ['Product Title', 'SKU Count', 'Status', 'Total Inventory', 'Created At', 'Updated At'],
+          ['Product Title', 'Revenue', 'Quantity Sold', 'Avg Unit Price', 'Order Count', 'Currency'],
           ...data.products.map(p => [
             p.title,
-            p.variantSkus.length,
-            p.status,
-            p.totalInventory,
-            p.createdAt,
-            p.updatedAt,
+            p.revenue,
+            p.quantitySold,
+            p.avgUnitPrice,
+            p.orderCount,
+            p.currencyCode,
           ]),
         ].map(row => row.map(csvField).join(',')).join('\r\n');
       } else {
