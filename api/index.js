@@ -262,6 +262,7 @@ const COMMISSION_AGGREGATION_TIMEOUT_MS = 55000;
 function isCommissionAggregationRequest(req) {
   const p = req.path || '';
   if (req.method === 'POST' && p === '/api/metrics/backfill') return true;
+  if (p === '/api/metrics/cron-backfill') return true;
   if (req.method !== 'GET') return false;
   if (p === '/api/commissions') return true;
   if (p === '/api/reports/commissions' || p === '/api/reports/commissions/export.csv') return true;
@@ -333,6 +334,7 @@ const shopifyAppInstance = shopifyApp({
       'read_customers',
       'write_customers',
       'read_orders',
+      'read_all_orders',
       'read_metaobjects',
       'write_metaobjects',
     ],
@@ -1046,7 +1048,7 @@ async function fetchCompaniesRevenueSince(client, jobs, onProgress) {
   const shop = shopFromClient(client);
   if (companyMetrics.enabled && shop && jobs.length) {
     try {
-      if (!(await companyMetrics.isReady(shop))) {
+      if (!(await companyMetrics.isComplete(shop))) {
         await companyMetrics.backfillChunk(shop, client, {
           maxPages: 8,
           maxMs: 18000,
@@ -1055,7 +1057,7 @@ async function fetchCompaniesRevenueSince(client, jobs, onProgress) {
             : undefined,
         });
       }
-      if (await companyMetrics.isReady(shop)) {
+      if (await companyMetrics.isComplete(shop)) {
         const sums = await companyMetrics.sumJobs(shop, jobs);
         if (typeof onProgress === 'function') {
           onProgress({ phase: 'revenue', done: jobs.length, total: jobs.length });
@@ -2360,7 +2362,7 @@ async function ensureRollupReady(client, { products } = {}) {
       : !(await companyMetrics.isReady(shop))) {
       await companyMetrics.backfillChunk(shop, client, { maxPages: 20, maxMs: 25000 });
     }
-    const ready = await companyMetrics.isReady(shop);
+    const ready = await companyMetrics.isComplete(shop);
     if (products && ready && !(await companyMetrics.isProductsReady(shop))) {
       await companyMetrics.backfillProductChunk(shop, client, { maxPages: 6, maxMs: 18000 });
     }
@@ -2535,6 +2537,52 @@ app.post('/api/metrics/backfill', validateAuthenticatedSession, async (req, res)
     res.json(result);
   } catch (error) {
     console.error('POST /api/metrics/backfill', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+function authorizeMetricsCron(req) {
+  const secret = String(process.env.CRON_SECRET || '').trim();
+  const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (secret) {
+    return req.headers['x-cron-secret'] === secret || bearer === secret;
+  }
+  return req.headers['x-vercel-cron'] === '1';
+}
+
+app.get('/api/metrics/cron-backfill', async (req, res) => {
+  try {
+    if (!authorizeMetricsCron(req)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    if (!companyMetrics.enabled) {
+      return res.status(503).json({ error: 'Postgres is required for order rollups.' });
+    }
+    const shops = typeof companyMetrics.shopsNeedingBackfill === 'function'
+      ? await companyMetrics.shopsNeedingBackfill()
+      : [];
+    const shop = shops[0];
+    if (!shop) {
+      return res.json({ ok: true, status: 'complete', ingested: 0 });
+    }
+    if (typeof shopifySessionStorage.findSessionsByShop !== 'function') {
+      return res.status(503).json({ error: `No Shopify session for ${shop}` });
+    }
+    const sessions = await shopifySessionStorage.findSessionsByShop(shop);
+    const session = (sessions || []).find((s) => s?.accessToken && !s.isOnline)
+      || (sessions || []).find((s) => s?.accessToken);
+    if (!session) {
+      return res.status(503).json({ error: `No Shopify session for ${shop}` });
+    }
+    const graphqlClient = new shopify.clients.Graphql({ session });
+    const result = await companyMetrics.backfillChunk(shop, graphqlClient, {
+      maxPages: 30,
+      maxMs: 50000,
+      pageSize: 100,
+    });
+    res.json({ ok: true, shop, ...result });
+  } catch (error) {
+    console.error('GET /api/metrics/cron-backfill', error);
     res.status(500).json({ error: error.message });
   }
 });
