@@ -8,8 +8,6 @@
     <script src="https://cdn.shopify.com/shopifycloud/polaris.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
-    <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
-    <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #f6faff; }
         .toast {
@@ -379,6 +377,7 @@
 <script>window.shopifyApiFetch = window.fetch.bind(window);</script>
 <script type="module" src="/shopify-session-bootstrap.js"></script>
 <script src="/page-progress.js"></script>
+<script src="/app-data-cache.js"></script>
 <script>
     let companies = [];
     let locations = [];
@@ -689,6 +688,73 @@
         renderCustomers();
     }
 
+    function applyCompaniesPayload(companiesData) {
+        companies = (companiesData?.edges || []).map(e => e.node);
+        renderCustomers();
+    }
+
+    function applyLocationsPayload(locationsData) {
+        locations = (locationsData?.edges || []).map(e => {
+            const fields = {};
+            (e.node?.fields || []).forEach(f => { fields[f.key] = f.value; });
+            return {
+                id: e.node.id,
+                handle: e.node.handle,
+                ...fields
+            };
+        });
+        renderSummary();
+        if (map) updateMarkers();
+    }
+
+    function paintDashboardFromCache() {
+        const cache = window.AppDataCache;
+        if (!cache) return false;
+        const cachedCompanies = cache.peek(apiUrl('/api/companies'));
+        const cachedLocations = cache.peek(apiUrl('/api/locations'));
+        const cachedStaff = cache.peek(apiUrl('/api/staff'));
+        const cachedSession = cache.peek(apiUrl('/api/session-info'));
+        if (cachedCompanies) applyCompaniesPayload(cachedCompanies);
+        if (cachedLocations) applyLocationsPayload(cachedLocations);
+        if (cachedStaff) staffList = cachedStaff.staff || [];
+        if (cachedSession) applySessionInfo(cachedSession);
+        updateClaimStaffVisibility();
+        return Boolean(cachedCompanies);
+    }
+
+    async function refreshCompanies() {
+        const { data, revalidate } = await window.AppDataCache.loadJson(apiUrl('/api/companies'), {
+            onCached: applyCompaniesPayload,
+        });
+        applyCompaniesPayload(data);
+        if (revalidate) {
+            revalidate.then((fresh) => {
+                if (fresh?.data) applyCompaniesPayload(fresh.data);
+            });
+        }
+        return data;
+    }
+
+    async function refreshLocations() {
+        try {
+            const { data, revalidate } = await window.AppDataCache.loadJson(apiUrl('/api/locations'), {
+                onCached: applyLocationsPayload,
+            });
+            applyLocationsPayload(data);
+            if (revalidate) {
+                revalidate.then((fresh) => {
+                    if (fresh?.data) applyLocationsPayload(fresh.data);
+                });
+            }
+        } catch (e) {
+            if (!locations.length) {
+                locations = [];
+                renderSummary();
+            }
+            console.warn(e.message || e);
+        }
+    }
+
     async function loadData(silent = false, onStep) {
         const ownBar = !silent && typeof onStep !== 'function';
         if (ownBar) window.pageProgress.begin({ total: 2, label: 'Loading dashboard' });
@@ -697,44 +763,10 @@
             else if (ownBar) window.pageProgress.advance(label);
         };
         try {
-            const [companiesRes, locationsRes] = await Promise.all([
-                window.shopifyApiFetch(apiUrl('/api/companies')).then((res) => {
-                    step('Companies loaded');
-                    return res;
-                }),
-                window.shopifyApiFetch(apiUrl('/api/locations')).then((res) => {
-                    step('Map locations loaded');
-                    return res;
-                }),
+            await Promise.all([
+                refreshCompanies().then(() => step('Companies loaded')),
+                refreshLocations().then(() => step('Map locations loaded')),
             ]);
-
-            if (!companiesRes.ok) {
-                throw new Error(await readApiError(companiesRes, 'Failed to load companies'));
-            }
-
-            const companiesData = await companiesRes.json();
-            companies = (companiesData.edges || []).map(e => e.node);
-
-            if (locationsRes.ok) {
-                const locationsData = await locationsRes.json();
-                locations = (locationsData.edges || []).map(e => {
-                    const fields = {};
-                    (e.node?.fields || []).forEach(f => { fields[f.key] = f.value; });
-                    return {
-                        id: e.node.id,
-                        handle: e.node.handle,
-                        ...fields
-                    };
-                });
-            } else {
-                locations = [];
-                const locError = await readApiError(locationsRes, 'Failed to load map locations');
-                console.warn(locError);
-            }
-
-            renderCustomers();
-            renderSummary();
-            if (map) updateMarkers();
             if (ownBar) window.pageProgress.finish();
             return true;
         } catch (e) {
@@ -944,6 +976,7 @@
             const data = await res.json().catch(() => null);
             if (!res.ok) throw new Error(data?.error || 'Failed to update assignment');
             showToast('Assignment updated', 'success');
+            window.AppDataCache?.invalidatePrefix('/api/companies');
             await loadData();
         } catch (e) {
             showError(e.message);
@@ -1036,28 +1069,41 @@
     let currentUser = null;
 
     async function loadCommissions() {
-        window.pageProgress.begin({ total: 100, label: 'Loading commissions' });
+        const url = apiUrl('/api/commissions');
+        const cached = window.AppDataCache?.peek(url);
+        if (cached && !cached.code) {
+            commissionData = cached;
+            renderCommissions();
+        } else {
+            window.pageProgress.begin({ total: 100, label: 'Loading commissions' });
+        }
         try {
             const { res, data } = await window.fetchJsonWithProgress(
-                apiUrl('/api/commissions'),
+                url,
                 {},
-                window.applyWorkProgress,
+                cached ? undefined : window.applyWorkProgress,
             );
             if (!res.ok) {
                 // Defense in depth: the server is the real gate (see
                 // /api/commissions), this just re-shows the right prompt if
                 // the unlock state changed since checkCommissionsAccess ran.
                 if (data.code === 'PIN_REQUIRED' || data.code === 'PIN_NOT_SET') {
+                    window.AppDataCache?.invalidate(url);
                     window.pageProgress.fail();
                     openPinGateModal(data.code === 'PIN_NOT_SET' ? 'set' : 'verify');
                     return;
                 }
                 throw new Error(data.error || 'Failed to load commissions');
             }
+            window.AppDataCache?.set(url, data);
             commissionData = data;
             renderCommissions();
             window.pageProgress.finish();
         } catch (e) {
+            if (commissionData) {
+                window.pageProgress.finish();
+                return;
+            }
             window.pageProgress.fail();
             showError('Failed to load commissions: ' + e.message);
         }
@@ -1142,11 +1188,17 @@
     async function loadStaff(silent = false) {
         if (!silent) window.pageProgress.begin({ total: 1, label: 'Loading staff' });
         try {
-            const res = await window.shopifyApiFetch(apiUrl('/api/staff'));
-            if (!res.ok) throw new Error('Failed to load staff');
-            const data = await res.json();
+            const { data, revalidate } = await window.AppDataCache.loadJson(apiUrl('/api/staff'));
             staffList = data.staff || [];
             if (currentTab === 'staff') renderStaff();
+            if (revalidate) {
+                revalidate.then((fresh) => {
+                    if (!fresh?.data) return;
+                    staffList = fresh.data.staff || [];
+                    if (currentTab === 'staff') renderStaff();
+                    updateClaimStaffVisibility();
+                });
+            }
             if (!silent) window.pageProgress.finish();
         } catch (e) {
             if (!silent) {
@@ -1257,6 +1309,7 @@
 
             showToast('Staff member saved', 'success');
             closeAddStaffModal();
+            window.AppDataCache?.invalidatePrefix('/api/staff');
             await loadStaff();
         } catch (e) {
             showError('Failed to save staff: ' + e.message);
@@ -1273,6 +1326,7 @@
             if (!res.ok) throw new Error('Failed to delete staff');
 
             showToast('Staff member deleted', 'success');
+            window.AppDataCache?.invalidatePrefix('/api/staff');
             await loadStaff();
         } catch (e) {
             showError('Failed to delete staff: ' + e.message);
@@ -1296,16 +1350,28 @@
         document.getElementById('claim-staff-btn').style.display = show ? '' : 'none';
     }
 
+    function applySessionInfo(data) {
+        isManagerGlobal = !!data.isManager;
+        hasAnyManagerGlobal = !!data.hasAnyManager;
+        document.getElementById('tab-staff').style.display = isManagerGlobal ? '' : 'none';
+        document.getElementById('claim-admin-btn').style.display = data.hasAnyManager ? 'none' : '';
+        document.getElementById('reports-link').style.display = isManagerGlobal ? '' : 'none';
+    }
+
     async function checkUserRole() {
         try {
-            const res = await window.shopifyApiFetch(apiUrl('/api/session-info'));
-            if (!res.ok) return;
-            const data = await res.json();
-            isManagerGlobal = !!data.isManager;
-            hasAnyManagerGlobal = !!data.hasAnyManager;
-            document.getElementById('tab-staff').style.display = isManagerGlobal ? '' : 'none';
-            document.getElementById('claim-admin-btn').style.display = data.hasAnyManager ? 'none' : '';
-            document.getElementById('reports-link').style.display = isManagerGlobal ? '' : 'none';
+            const { data, revalidate } = await window.AppDataCache.loadJson(apiUrl('/api/session-info'), {
+                onCached: applySessionInfo,
+            });
+            applySessionInfo(data);
+            if (revalidate) {
+                revalidate.then((fresh) => {
+                    if (fresh?.data) {
+                        applySessionInfo(fresh.data);
+                        updateClaimStaffVisibility();
+                    }
+                });
+            }
         } catch (e) {
             console.error('Failed to check user role:', e);
         }
@@ -1322,6 +1388,8 @@
             if (!res.ok) throw new Error(data?.error || 'Failed to claim admin');
 
             showToast('You are now the admin', 'success');
+            window.AppDataCache?.invalidatePrefix('/api/staff');
+            window.AppDataCache?.invalidatePrefix('/api/session-info');
             await checkUserRole();
             await loadStaff(true);
             updateClaimStaffVisibility();
@@ -1363,6 +1431,7 @@
 
             showToast('Account linked', 'success');
             closeClaimStaffModal();
+            window.AppDataCache?.invalidatePrefix('/api/staff');
             await loadStaff(true);
             updateClaimStaffVisibility();
             renderCustomers();
@@ -1428,10 +1497,29 @@
         renderLocations();
     }
 
-    function initMap() {
+    let mapboxLoading = null;
+    function loadMapbox() {
+        if (window.mapboxgl) return Promise.resolve();
+        if (mapboxLoading) return mapboxLoading;
+        mapboxLoading = new Promise((resolve, reject) => {
+            const css = document.createElement('link');
+            css.rel = 'stylesheet';
+            css.href = 'https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css';
+            document.head.appendChild(css);
+            const script = document.createElement('script');
+            script.src = 'https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js';
+            script.onload = resolve;
+            script.onerror = () => reject(new Error('Failed to load Mapbox'));
+            document.head.appendChild(script);
+        });
+        return mapboxLoading;
+    }
+
+    async function initMap() {
         if (!MAPBOX_TOKEN) return;
         document.getElementById('map-placeholder').style.display = 'none';
         try {
+            await loadMapbox();
             mapboxgl.accessToken = MAPBOX_TOKEN;
             map = new mapboxgl.Map({
                 container: 'map',
@@ -1499,8 +1587,8 @@
             if (!res.ok) throw new Error(data?.error || 'Sync failed');
             const incompleteNote = data.incomplete ? ' Partial run — click Run Map Sync again to continue.' : '';
             const skipNote = data.skipped ? `, skipped: ${data.skipped}` : '';
-            // Reload first (button already says Syncing — don't put the blur
-            // overlay over a toast that has already started its hide timer).
+            window.AppDataCache?.invalidatePrefix('/api/locations');
+            window.AppDataCache?.invalidatePrefix('/api/companies');
             const reloaded = await loadData(true);
             if (reloaded) {
                 showToast(`Sync complete. Created: ${data.created || 0}, updated: ${data.updated || 0}${skipNote}.${incompleteNote}`, 'success');
@@ -1525,18 +1613,30 @@
     async function init() {
         if (started) return;
         started = true;
-        window.pageProgress.begin({ total: 4, label: 'Loading dashboard' });
+        const painted = paintDashboardFromCache();
+        window.AppDataCache?.prefetchPages(['/analytics', '/reports']);
+        if (!painted) {
+            window.pageProgress.begin({ total: 4, label: 'Loading dashboard' });
+        }
         try {
+            const companiesP = refreshCompanies();
+            const locationsP = refreshLocations();
+            const staffP = loadStaff(true);
+            const roleP = checkUserRole();
+
+            await companiesP;
+            if (!painted) window.pageProgress.advance('Companies loaded');
+            window.AppDataCache?.whenIdle(() => window.AppDataCache.warmAnalytics());
+
             await Promise.all([
-                checkUserRole().then(() => window.pageProgress.advance('Account ready')),
-                loadStaff(true).then(() => window.pageProgress.advance('Staff loaded')),
+                roleP.then(() => { if (!painted) window.pageProgress.advance('Account ready'); }),
+                staffP.then(() => { if (!painted) window.pageProgress.advance('Staff loaded'); }),
+                locationsP.then(() => { if (!painted) window.pageProgress.advance('Map locations loaded'); }),
             ]);
             updateClaimStaffVisibility();
-            const loaded = await loadData(true, (label) => window.pageProgress.advance(label));
-            if (loaded) window.pageProgress.finish();
-            else window.pageProgress.fail();
+            if (!painted) window.pageProgress.finish();
         } catch (e) {
-            window.pageProgress.fail();
+            if (!painted) window.pageProgress.fail();
             showError(e.message);
         }
     }

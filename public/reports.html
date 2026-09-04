@@ -120,6 +120,7 @@
 
 <script type="module" src="/shopify-session-bootstrap.js"></script>
 <script src="/page-progress.js"></script>
+<script src="/app-data-cache.js"></script>
 <script>
     let toastHideTimer = null;
     let pinGateMode = null; // 'set' | 'verify'
@@ -233,14 +234,23 @@
 
     async function loadReport() {
         const month = document.getElementById('report-month').value;
-        window.pageProgress.begin({ total: 100, label: 'Loading report' });
+        const url = apiUrl(`/api/reports/commissions?month=${month}`);
+        const cached = window.AppDataCache?.peek(url);
+        if (cached && Array.isArray(cached.reps)) {
+            document.getElementById('not-manager-view').classList.add('hidden');
+            document.getElementById('report-root').classList.remove('hidden');
+            renderReport(cached);
+        } else {
+            window.pageProgress.begin({ total: 100, label: 'Loading report' });
+        }
         try {
             const { res, data } = await window.fetchJsonWithProgress(
-                apiUrl(`/api/reports/commissions?month=${month}`),
+                url,
                 {},
-                window.applyWorkProgress,
+                cached ? undefined : window.applyWorkProgress,
             );
             if (res.status === 403) {
+                window.AppDataCache?.invalidate(url);
                 window.pageProgress.fail();
                 if (data.code === 'PIN_REQUIRED' || data.code === 'PIN_NOT_SET') {
                     openPinGateModal(data.code === 'PIN_NOT_SET' ? 'set' : 'verify');
@@ -251,11 +261,16 @@
                 return;
             }
             if (!res.ok) throw new Error(data.error || 'Failed to load report');
+            window.AppDataCache?.set(url, data);
             document.getElementById('not-manager-view').classList.add('hidden');
             document.getElementById('report-root').classList.remove('hidden');
             renderReport(data);
             window.pageProgress.finish();
         } catch (e) {
+            if (cached && Array.isArray(cached.reps)) {
+                window.pageProgress.finish();
+                return;
+            }
             window.pageProgress.fail();
             showError(e.message);
         }
@@ -336,6 +351,8 @@
 
     document.getElementById('report-month').value = defaultMonthValue();
     document.getElementById('report-month').addEventListener('change', loadReport);
+    window.AppDataCache?.prefetchPages(['/', '/analytics']);
+    window.AppDataCache?.whenIdle(() => window.AppDataCache.warmDashboard());
 
     window.addEventListener('shopify:api-fetch-ready', loadReport, { once: true });
 </script>

@@ -139,6 +139,14 @@
       color: #6d7175;
     }
 
+    .kpi-subtext.yoy-up {
+      color: #008060;
+    }
+
+    .kpi-subtext.yoy-down {
+      color: #b42318;
+    }
+
     .charts-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -766,6 +774,7 @@
 
   <script type="module" src="/shopify-session-bootstrap.js"></script>
   <script src="/page-progress.js"></script>
+  <script src="/app-data-cache.js"></script>
   <script>
     // ==================== CONFIGURATION ====================
     const config = {
@@ -897,6 +906,38 @@
       };
     }
 
+    function yearOverYearRange(now = new Date()) {
+      return {
+        startDate: `${now.getFullYear() - 1}-01-01`,
+        endDate: formatLocalDate(now),
+        thisYear: now.getFullYear(),
+        lastYear: now.getFullYear() - 1,
+      };
+    }
+
+    function shiftRangeByYears(dateParams, years) {
+      const start = dateParams.startDate.slice(0, 10);
+      const end = dateParams.endDate.slice(0, 10);
+      const [startYear, startMonth, startDay] = start.split('-').map(Number);
+      const [endYear, endMonth, endDay] = end.split('-').map(Number);
+      return {
+        startDate: `${startYear + years}-${String(startMonth).padStart(2, '0')}-${String(startDay).padStart(2, '0')}T00:00:00.000Z`,
+        endDate: `${endYear + years}-${String(endMonth).padStart(2, '0')}-${String(endDay).padStart(2, '0')}T23:59:59.999Z`,
+      };
+    }
+
+    function formatYoYChange(current, prior) {
+      if (!Number.isFinite(prior) || prior <= 0) {
+        return { text: 'Vs last year once 2025 is in the rollup', className: '' };
+      }
+      const pct = ((current - prior) / prior) * 100;
+      const arrow = pct >= 0 ? '▲' : '▼';
+      return {
+        text: `${arrow} ${Math.abs(pct).toFixed(1)}% vs last year`,
+        className: pct >= 0 ? 'yoy-up' : 'yoy-down',
+      };
+    }
+
     function getDefaultDateRange() {
       return yearToDateRange();
     }
@@ -1002,18 +1043,35 @@
     }
 
     // ==================== API CALLS ====================
-    async function fetchWithDateRange(endpoint, dateParams = getDateRangeParams()) {
+    function buildAnalyticsUrl(endpoint, dateParams = getDateRangeParams()) {
       if (!dateParams) return null;
-
       const url = new URL(endpoint, window.location.origin);
       url.searchParams.append('startDate', dateParams.startDate);
       url.searchParams.append('endDate', dateParams.endDate);
       const pageParams = new URLSearchParams(window.location.search);
       if (pageParams.get('shop')) url.searchParams.set('shop', pageParams.get('shop'));
       if (pageParams.get('host')) url.searchParams.set('host', pageParams.get('host'));
+      return url.toString();
+    }
+
+    async function fetchWithDateRange(endpoint, dateParams = getDateRangeParams(), apply) {
+      if (!dateParams) return null;
+      const url = buildAnalyticsUrl(endpoint, dateParams);
+      if (!url) return null;
+
+      if (window.AppDataCache) {
+        const { data, revalidate } = await window.AppDataCache.loadJson(url, { onCached: apply });
+        if (typeof apply === 'function' && data) apply(data);
+        if (revalidate) {
+          revalidate.then((fresh) => {
+            if (fresh?.data && typeof apply === 'function') apply(fresh.data);
+          });
+        }
+        return data;
+      }
 
       const fetchFn = window.shopifyApiFetch || fetch;
-      const response = await fetchFn(url.toString(), { credentials: 'same-origin' });
+      const response = await fetchFn(url, { credentials: 'same-origin' });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(data.error || `HTTP ${response.status}: ${response.statusText}`);
@@ -1034,11 +1092,22 @@
 
     async function fetchAnalyticsSummary() {
       try {
-        const data = await fetchWithDateRange(config.API_BASE + '/summary');
-        if (data && data.summary) {
-          noteDataSource(data);
-          updateKPICards(data.summary);
-        }
+        const currentParams = getDateRangeParams();
+        const priorParams = currentParams ? shiftRangeByYears(currentParams, -1) : null;
+        const [current] = await Promise.all([
+          fetchWithDateRange(config.API_BASE + '/summary', currentParams, (data) => {
+            if (data && data.summary) {
+              noteDataSource(data);
+              updateKPICards(data.summary);
+            }
+          }),
+          priorParams
+            ? fetchWithDateRange(config.API_BASE + '/summary', priorParams, (data) => {
+              if (data && data.summary) updateKPICards(undefined, data.summary);
+            })
+            : Promise.resolve(null),
+        ]);
+        return current;
       } catch (error) {
         handleApiError(error, 'analytics summary');
       }
@@ -1046,15 +1115,16 @@
 
     async function fetchRevenueTrend() {
       try {
-        const ytd = yearToDateRange();
-        const data = await fetchWithDateRange(config.API_BASE + '/revenue-trend?period=monthly', {
-          startDate: `${ytd.startDate}T00:00:00.000Z`,
-          endDate: `${ytd.endDate}T23:59:59.999Z`,
+        const compare = yearOverYearRange();
+        await fetchWithDateRange(config.API_BASE + '/revenue-trend?period=monthly', {
+          startDate: `${compare.startDate}T00:00:00.000Z`,
+          endDate: `${compare.endDate}T23:59:59.999Z`,
+        }, (data) => {
+          if (data && data.trends) {
+            noteDataSource(data);
+            renderRevenueTrendChart(data.trends, compare);
+          }
         });
-        if (data && data.trends) {
-          noteDataSource(data);
-          renderRevenueTrendChart(data.trends, ytd);
-        }
       } catch (error) {
         handleApiError(error, 'revenue trend');
       }
@@ -1062,13 +1132,14 @@
 
     async function fetchCompaniesAnalytics() {
       try {
-        const data = await fetchWithDateRange(config.API_BASE + '/companies?sortBy=revenue&sortOrder=desc');
-        if (data) {
-          noteDataSource(data);
-          renderCompaniesTable(data.companies || []);
-          renderCompaniesByRevenueChart(data.companies || []);
-          renderRevenueMixChart(data.companies || []);
-        }
+        await fetchWithDateRange(config.API_BASE + '/companies?sortBy=revenue&sortOrder=desc', undefined, (data) => {
+          if (data) {
+            noteDataSource(data);
+            renderCompaniesTable(data.companies || []);
+            renderCompaniesByRevenueChart(data.companies || []);
+            renderRevenueMixChart(data.companies || []);
+          }
+        });
       } catch (error) {
         handleApiError(error, 'companies analytics');
       }
@@ -1076,12 +1147,13 @@
 
     async function fetchProductsAnalytics() {
       try {
-        const data = await fetchWithDateRange(config.API_BASE + '/products');
-        if (data) {
-          noteDataSource(data);
-          renderProductsTable(data.products || []);
-          renderTopProductsChart(data.products || []);
-        }
+        await fetchWithDateRange(config.API_BASE + '/products', undefined, (data) => {
+          if (data) {
+            noteDataSource(data);
+            renderProductsTable(data.products || []);
+            renderTopProductsChart(data.products || []);
+          }
+        });
       } catch (error) {
         handleApiError(error, 'products analytics');
       }
@@ -1121,34 +1193,45 @@
       }
     }
 
+    const kpiState = { current: null, prior: null };
+
+    function setYoYSubtext(id, currentValue, priorValue, emptyText) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const yoy = formatYoYChange(currentValue, priorValue);
+      el.className = `kpi-subtext ${yoy.className}`.trim();
+      el.textContent = priorValue == null ? emptyText : yoy.text;
+    }
+
     // ==================== KPI CARDS ====================
-    function updateKPICards(data) {
-      const currency = data.currencyCode || 'USD';
+    function updateKPICards(data, prior) {
+      if (data) kpiState.current = data;
+      if (prior) kpiState.prior = prior;
+      const current = kpiState.current;
+      if (!current) return;
+
+      const currency = current.currencyCode || 'USD';
       const currencySymbol = getCurrencySymbol(currency);
+      const priorSummary = kpiState.prior;
 
-      // Total Revenue
-      const totalRevenue = data.revenue || 0;
+      const totalRevenue = current.revenue || 0;
       document.getElementById('totalRevenue').textContent = formatNumber(totalRevenue);
-      document.getElementById('revenueTrend').textContent = 'Selected date range';
+      setYoYSubtext('revenueTrend', totalRevenue, priorSummary?.revenue, 'Selected date range');
 
-      // Total Orders
-      const totalOrders = data.orders || 0;
+      const totalOrders = current.orders || 0;
       document.getElementById('totalOrders').textContent = formatNumber(totalOrders);
-      document.getElementById('ordersTrend').textContent = `Orders count`;
+      setYoYSubtext('ordersTrend', totalOrders, priorSummary?.orders, 'Orders count');
 
-      // Average Order Value
-      const avgOrderValue = data.avgOrderValue || 0;
+      const avgOrderValue = current.avgOrderValue || 0;
       document.getElementById('avgOrderValue').textContent = formatNumber(avgOrderValue);
-      document.getElementById('aoeTrend').textContent = `Average per order`;
+      setYoYSubtext('aoeTrend', avgOrderValue, priorSummary?.avgOrderValue, 'Average per order');
 
-      // Total Companies
-      const totalCompanies = data.totalCompanies || 0;
+      const totalCompanies = current.totalCompanies || 0;
       document.getElementById('totalCompanies').textContent = formatNumber(totalCompanies);
 
-      // Top Product
-      if (data.topProduct) {
-        document.getElementById('topProductName').textContent = data.topProduct.title || 'N/A';
-        const topProductRevenue = data.topProduct.revenue || 0;
+      if (current.topProduct) {
+        document.getElementById('topProductName').textContent = current.topProduct.title || 'N/A';
+        const topProductRevenue = current.topProduct.revenue || 0;
         document.getElementById('topProductRevenue').textContent =
           `Revenue: ${currencySymbol}${formatNumber(topProductRevenue)}`;
       }
@@ -1192,23 +1275,42 @@
       }
     }
 
-    function renderRevenueTrendChart(trends, range = yearToDateRange()) {
+    function renderRevenueTrendChart(trends, range = yearOverYearRange()) {
       destroyChart(charts.revenueTrend);
 
       const ctx = document.getElementById('revenueTrendChart');
       if (!ctx || typeof Chart !== 'function') return;
 
+      const thisYear = range.thisYear || parseLocalDate(range.endDate).getFullYear();
+      const lastYear = range.lastYear || thisYear - 1;
+      const series = fillTrendGaps(trends, range.startDate, range.endDate, 'monthly');
+      const thisByMonth = new Array(12).fill(null);
+      const lastByMonth = new Array(12).fill(null);
+      const now = new Date();
+      const latestThisMonth = now.getFullYear() === thisYear ? now.getMonth() : 11;
+
+      series.forEach((row) => {
+        const date = parseLocalDate(row.date);
+        const month = date.getMonth();
+        if (date.getFullYear() === lastYear) lastByMonth[month] = parseFloat(row.revenue) || 0;
+        if (date.getFullYear() === thisYear && month <= latestThisMonth) {
+          thisByMonth[month] = parseFloat(row.revenue) || 0;
+        }
+      });
+
+      const thisYtd = thisByMonth.reduce((sum, value) => sum + (value || 0), 0);
+      const lastYtd = lastByMonth.reduce((sum, value, month) => (
+        month <= latestThisMonth ? sum + (value || 0) : sum
+      ), 0);
+      const yoy = formatYoYChange(thisYtd, lastYtd);
       const subtitle = document.getElementById('revenueTrendSubtitle');
       if (subtitle) {
-        subtitle.textContent = formatChartRangeLabel(range.startDate, range.endDate);
+        subtitle.textContent = lastYtd > 0
+          ? `${lastYear} vs ${thisYear} by month. YTD ${yoy.text.toLowerCase()}.`
+          : `${lastYear}–${thisYear} monthly revenue. Last year fills in as the 2025 backfill finishes.`;
       }
 
-      const series = fillTrendGaps(trends, range.startDate, range.endDate, 'monthly');
-      const labels = series.map((row) => {
-        return parseLocalDate(row.date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-      });
-      const revenues = series.map((row) => parseFloat(row.revenue) || 0);
-      const orders = series.map((row) => parseInt(row.orders, 10) || 0);
+      const labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
       charts.revenueTrend = new Chart(ctx, {
         type: 'line',
@@ -1216,24 +1318,25 @@
           labels,
           datasets: [
             {
-              label: 'Revenue',
-              data: revenues,
+              label: `${thisYear} revenue`,
+              data: thisByMonth,
               borderColor: '#008060',
-              backgroundColor: 'rgba(0, 128, 96, 0.1)',
+              backgroundColor: 'rgba(0, 128, 96, 0.12)',
               borderWidth: 2,
               fill: true,
-              tension: 0.4,
-              yAxisID: 'y',
+              tension: 0.3,
+              spanGaps: false,
             },
             {
-              label: 'Orders',
-              data: orders,
-              borderColor: '#0066cc',
-              backgroundColor: 'rgba(0, 102, 204, 0.1)',
+              label: `${lastYear} revenue`,
+              data: lastByMonth,
+              borderColor: '#6d7175',
+              backgroundColor: 'rgba(109, 113, 117, 0.08)',
               borderWidth: 2,
+              borderDash: [6, 4],
               fill: false,
-              tension: 0.4,
-              yAxisID: 'y1',
+              tension: 0.3,
+              spanGaps: false,
             },
           ],
         },
@@ -1241,17 +1344,20 @@
           responsive: true,
           maintainAspectRatio: false,
           interaction: { mode: 'index', intersect: false },
+          plugins: {
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  const value = context.parsed.y;
+                  return value == null ? `${context.dataset.label}: —` : `${context.dataset.label}: ${formatCurrency(value)}`;
+                },
+              },
+            },
+          },
           scales: {
             y: {
               type: 'linear',
-              position: 'left',
               title: { display: true, text: 'Revenue ($)' },
-            },
-            y1: {
-              type: 'linear',
-              position: 'right',
-              title: { display: true, text: 'Orders' },
-              grid: { drawOnChartArea: false },
             },
           },
         },
@@ -1602,14 +1708,24 @@
     }
 
     // ==================== REFRESH ALL ====================
+    function analyticsHasCache() {
+      const dateParams = getDateRangeParams();
+      if (!dateParams || !window.AppDataCache) return false;
+      const summaryUrl = buildAnalyticsUrl(config.API_BASE + '/summary', dateParams);
+      return Boolean(summaryUrl && window.AppDataCache.peek(summaryUrl));
+    }
+
     async function refreshAllData() {
+      kpiState.current = null;
+      kpiState.prior = null;
       document.getElementById('applyFilter').disabled = true;
+      const painted = analyticsHasCache();
       const sourceEl = document.getElementById('data-source');
-      if (sourceEl) {
+      if (sourceEl && !painted) {
         delete sourceEl.dataset.rollup;
         sourceEl.textContent = 'Loading date-range metrics…';
       }
-      if (window.pageProgress) {
+      if (!painted && window.pageProgress) {
         window.pageProgress.begin({ total: 4, label: 'Loading analytics' });
       }
 
@@ -1622,13 +1738,13 @@
         ];
         await Promise.all(tasks.map(async ([label, fn]) => {
           await fn();
-          if (window.pageProgress) window.pageProgress.advance(label);
+          if (!painted && window.pageProgress) window.pageProgress.advance(label);
         }));
-        if (window.pageProgress) window.pageProgress.finish();
+        if (!painted && window.pageProgress) window.pageProgress.finish();
       } catch (error) {
         console.error('Error refreshing data:', error);
         showError('Failed to refresh analytics data');
-        if (window.pageProgress) window.pageProgress.fail();
+        if (!painted && window.pageProgress) window.pageProgress.fail();
       } finally {
         document.getElementById('applyFilter').disabled = false;
       }
@@ -1663,6 +1779,8 @@
     // ==================== INITIALIZATION ====================
     function initialize() {
       initializeDateInputs();
+      window.AppDataCache?.prefetchPages(['/', '/reports']);
+      window.AppDataCache?.whenIdle(() => window.AppDataCache.warmDashboard());
       refreshAllData();
     }
 

@@ -191,6 +191,9 @@ function injectShopifyApiKeyMeta(html) {
 function sendAppHtmlFile(res, filename) {
   const filePath = path.join(publicDir, filename);
   const html = fs.readFileSync(filePath, 'utf8');
+  const mtime = fs.statSync(filePath).mtimeMs;
+  res.setHeader('Cache-Control', 'private, max-age=60, stale-while-revalidate=300');
+  res.setHeader('ETag', `"${filename}-${mtime}"`);
   res.type('html').send(injectShopifyApiKeyMeta(html));
 }
 
@@ -2335,8 +2338,10 @@ async function ensureRollupReady(client, { products } = {}) {
     return { shop, ready: false, productsReady: false };
   }
   try {
-    if (!(await companyMetrics.isReady(shop))) {
-      await companyMetrics.backfillChunk(shop, client, { maxPages: 8, maxMs: 18000 });
+    if (typeof companyMetrics.isComplete === 'function'
+      ? !(await companyMetrics.isComplete(shop))
+      : !(await companyMetrics.isReady(shop))) {
+      await companyMetrics.backfillChunk(shop, client, { maxPages: 15, maxMs: 25000 });
     }
     const ready = await companyMetrics.isReady(shop);
     if (products && ready && !(await companyMetrics.isProductsReady(shop))) {
@@ -2932,7 +2937,7 @@ app.get('/api/analytics/export', validateAuthenticatedSession, async (req, res) 
 // END ANALYTICS ENDPOINTS
 // ============================================================================
 
-app.use(express.static(publicDir, { index: false }));
+app.use(express.static(publicDir, { index: false, maxAge: '5m', etag: true }));
 
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
