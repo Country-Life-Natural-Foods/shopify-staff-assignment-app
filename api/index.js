@@ -2599,8 +2599,8 @@ app.get('/api/metrics/cron-backfill', async (req, res) => {
     }
     const graphqlClient = new shopify.clients.Graphql({ session });
     const result = await companyMetrics.backfillChunk(shop, graphqlClient, {
-      maxPages: 30,
-      maxMs: 50000,
+      maxPages: 500,
+      maxMs: 270000,
       pageSize: 100,
     });
     res.json({ ok: true, shop, ...result });
