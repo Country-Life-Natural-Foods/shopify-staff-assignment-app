@@ -258,11 +258,24 @@ const REQUEST_TIMEOUT_MS = 20000;
 // Keep them well under Vercel's 300s cap, but don't treat a 20s aggregation
 // as a hung request the way we do for "/" / session lookups.
 const COMMISSION_AGGREGATION_TIMEOUT_MS = 55000;
+// The rollup cron has no merchant waiting on it, so the guard exists only to
+// stay inside Vercel's 300s maxDuration. Giving it the 55s merchant budget was
+// actively harmful: the chunk's own 50s work window plus its final writes ran
+// past the guard, the 503 froze the invocation, and the run's cursor was lost.
+// Sized against vercel.json's 300s maxDuration, not against each other by
+// accident: the chunk stops paging at 240s, leaving 30s to write its terminal
+// status before the guard fires and another 30s before Vercel hard-kills the
+// invocation. The cron fires every 5 minutes, so runs never overlap.
+const METRICS_CRON_TIMEOUT_MS = 270000;
+const METRICS_CRON_WORK_MS = 240000;
+
+function isMetricsCronRequest(req) {
+  return req.path === '/api/metrics/cron-backfill';
+}
 
 function isCommissionAggregationRequest(req) {
   const p = req.path || '';
   if (req.method === 'POST' && p === '/api/metrics/backfill') return true;
-  if (p === '/api/metrics/cron-backfill') return true;
   if (req.method !== 'GET') return false;
   if (p === '/api/commissions') return true;
   if (p === '/api/reports/commissions' || p === '/api/reports/commissions/export.csv') return true;
@@ -275,9 +288,9 @@ function isCommissionAggregationRequest(req) {
 }
 
 app.use((req, res, next) => {
-  const timeoutMs = isCommissionAggregationRequest(req)
-    ? COMMISSION_AGGREGATION_TIMEOUT_MS
-    : REQUEST_TIMEOUT_MS;
+  let timeoutMs = REQUEST_TIMEOUT_MS;
+  if (isMetricsCronRequest(req)) timeoutMs = METRICS_CRON_TIMEOUT_MS;
+  else if (isCommissionAggregationRequest(req)) timeoutMs = COMMISSION_AGGREGATION_TIMEOUT_MS;
   const timer = setTimeout(() => {
     if (!res.headersSent) {
       console.error(`[timeout-guard] ${req.method} ${req.originalUrl} exceeded ${timeoutMs}ms`);
@@ -2600,7 +2613,7 @@ app.get('/api/metrics/cron-backfill', async (req, res) => {
     const graphqlClient = new shopify.clients.Graphql({ session });
     const result = await companyMetrics.backfillChunk(shop, graphqlClient, {
       maxPages: 500,
-      maxMs: 270000,
+      maxMs: METRICS_CRON_WORK_MS,
       pageSize: 100,
     });
     res.json({ ok: true, shop, ...result });
