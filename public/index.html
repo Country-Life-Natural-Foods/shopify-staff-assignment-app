@@ -115,6 +115,7 @@
                     <button onclick="setFilter('90')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="90">90+ Days</button>
                     <button onclick="setFilter('never')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="never">Never Ordered</button>
                     <button onclick="setFilter('new')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="new">New Partners</button>
+                    <button onclick="setFilter('sample-follow-up')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="sample-follow-up">Sample sent · needs follow-up</button>
                     <span class="text-xs text-zinc-400 ml-2 hidden sm:inline">Sort</span>
                     <button type="button" onclick="setSort('stale')" class="sort-btn px-3 py-1 rounded-md text-sm font-medium bg-[#008060] text-white" data-sort="stale">Longest since order</button>
                     <button type="button" onclick="setSort('recent')" class="sort-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-sort="recent">Most recent order</button>
@@ -354,22 +355,70 @@
         </div>
     </div>
 
-    <!-- Notes Drawer -->
-    <div id="notes-drawer" class="notes-drawer fixed right-0 top-0 h-full w-full md:w-96 bg-white shadow-xl z-40 flex flex-col border-l border-zinc-200">
+    <!-- Company detail drawer -->
+    <div id="notes-drawer" class="notes-drawer fixed right-0 top-0 h-full w-full md:w-[30rem] bg-white shadow-xl z-40 flex flex-col border-l border-zinc-200">
         <div class="p-4 border-b border-zinc-200 flex justify-between items-center flex-shrink-0">
-            <h3 class="font-bold text-lg" id="notes-company-name">Notes</h3>
+            <div>
+                <p class="text-xs font-medium uppercase tracking-wide text-zinc-500">Company details</p>
+                <h3 class="font-bold text-lg" id="notes-company-name">Company</h3>
+            </div>
             <button onclick="closeNotes()" class="p-1 hover:bg-zinc-100 rounded-md">
                 <span class="material-symbols-outlined text-xl">close</span>
             </button>
         </div>
-        <div class="flex-1 overflow-y-auto p-4 space-y-3" id="notes-list">
-            <!-- Notes populated by JS -->
-        </div>
-        <div class="p-4 border-t border-zinc-200 flex-shrink-0 space-y-2">
-            <textarea id="note-input" placeholder="Add a note..." class="w-full p-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none transition-all" rows="3"></textarea>
-            <button onclick="saveNote()" class="w-full bg-[#008060] text-white px-3 py-2 rounded-md text-sm font-medium hover:bg-[#00654b] active:scale-[0.98] transition-all">
-                Save Note
-            </button>
+        <div class="flex-1 overflow-y-auto">
+            <section class="p-4 border-b border-zinc-200">
+                <h4 class="font-semibold text-sm mb-3">Overview</h4>
+                <div id="company-overview" class="space-y-3"></div>
+            </section>
+
+            <details id="notes-section" class="group border-b border-zinc-200">
+                <summary class="cursor-pointer list-none p-4 flex items-center justify-between font-semibold text-sm hover:bg-zinc-50">
+                    <span class="flex items-center gap-2"><span class="material-symbols-outlined text-lg text-zinc-500">notes</span>Notes</span>
+                    <span class="material-symbols-outlined text-lg text-zinc-400 group-open:rotate-180 transition-transform">expand_more</span>
+                </summary>
+                <div class="px-4 pb-4">
+                    <div class="space-y-3 mb-4" id="notes-list"></div>
+                    <div class="space-y-2">
+                        <textarea id="note-input" placeholder="Add a note..." class="w-full p-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none transition-all" rows="3" maxlength="500"></textarea>
+                        <button onclick="saveNote()" class="w-full bg-[#008060] text-white px-3 py-2 rounded-md text-sm font-medium hover:bg-[#00654b] active:scale-[0.98] transition-all">Save Note</button>
+                    </div>
+                </div>
+            </details>
+
+            <details id="sample-box-section" class="group border-b border-zinc-200">
+                <summary class="cursor-pointer list-none p-4 flex items-center justify-between font-semibold text-sm hover:bg-zinc-50">
+                    <span class="flex items-center gap-2"><span class="material-symbols-outlined text-lg text-zinc-500">package_2</span>Sample box</span>
+                    <span class="material-symbols-outlined text-lg text-zinc-400 group-open:rotate-180 transition-transform">expand_more</span>
+                </summary>
+                <div class="px-4 pb-4 space-y-3">
+                    <div id="sample-box-details" class="text-sm text-zinc-600"></div>
+                    <div>
+                        <label for="sample-box-note" class="block text-xs font-medium text-zinc-600 mb-1">Contents / short note</label>
+                        <input id="sample-box-note" type="text" maxlength="500" class="w-full px-3 py-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060]" placeholder="What was included?"/>
+                    </div>
+                    <div>
+                        <label for="sample-box-follow-up" class="block text-xs font-medium text-zinc-600 mb-1">Follow-up due (optional)</label>
+                        <input id="sample-box-follow-up" type="date" class="w-full px-3 py-2 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060]"/>
+                    </div>
+                    <label class="flex items-center gap-2 text-xs text-zinc-600">
+                        <input id="sample-box-auto-note" type="checkbox" checked class="rounded border-zinc-300 text-[#008060] focus:ring-[#008060]"/>
+                        Add this status change to Notes
+                    </label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button id="mark-sample-sent" onclick="updateSampleBox('sent')" class="px-3 py-2 bg-[#008060] text-white rounded-md text-sm font-medium hover:bg-[#00654b]">Mark sent</button>
+                        <button id="mark-sample-received" onclick="updateSampleBox('received')" class="px-3 py-2 border border-zinc-300 text-zinc-700 rounded-md text-sm font-medium hover:bg-zinc-50">Mark received</button>
+                    </div>
+                </div>
+            </details>
+
+            <details id="intelligence-section" class="group border-b border-zinc-200">
+                <summary class="cursor-pointer list-none p-4 flex items-center justify-between font-semibold text-sm hover:bg-zinc-50">
+                    <span class="flex items-center gap-2"><span class="material-symbols-outlined text-lg text-zinc-500">insights</span>Buying intelligence</span>
+                    <span class="material-symbols-outlined text-lg text-zinc-400 group-open:rotate-180 transition-transform">expand_more</span>
+                </summary>
+                <div id="buying-intelligence" class="px-4 pb-4"></div>
+            </details>
         </div>
     </div>
 </div>
@@ -387,6 +436,9 @@
     let currentFilter = 'all';
     let currentSort = 'stale';
     let selectedCompanyId = null;
+    let selectedCompany = null;
+    let selectedSampleBox = { status: 'none' };
+    let selectedCompanyIntelligence = null;
     let toastHideTimer = null;
 
     const MAPBOX_TOKEN = document.querySelector('meta[name="mapbox-token"]')?.getAttribute('content') || '';
@@ -809,12 +861,27 @@
     function shouldShowCompany(company) {
         if (currentFilter === 'all') return true;
         if (currentFilter === 'new') return isNewPartner(company);
+        if (currentFilter === 'sample-follow-up') return company.sampleBox?.status === 'sent';
         const days = company.performance?.daysSinceLastOrder;
         if (currentFilter === '30') return days !== null && days !== undefined && days <= 30;
         if (currentFilter === '89') return days !== null && days !== undefined && days > 30 && days <= 89;
         if (currentFilter === '90') return days !== null && days !== undefined && days > 89;
         if (currentFilter === 'never') return !companyHasOrdered(company);
         return true;
+    }
+
+    function daysSinceTimestamp(timestamp) {
+        if (!timestamp) return null;
+        const value = new Date(timestamp).getTime();
+        if (Number.isNaN(value)) return null;
+        return Math.max(0, Math.floor((Date.now() - value) / (1000 * 60 * 60 * 24)));
+    }
+
+    function sampleBoxBadge(sampleBox) {
+        if (sampleBox?.status !== 'sent') return '';
+        const days = daysSinceTimestamp(sampleBox.sentAt);
+        const age = days === null ? '' : ` · ${days}d`;
+        return `<span class="px-2 py-1 rounded text-xs font-medium bg-violet-100 text-violet-700">Sample sent${age}</span>`;
     }
 
     function renderAssignedRepCell(c) {
@@ -884,6 +951,7 @@
                             ${c.externalId ? `<p class="text-xs text-zinc-500 mt-1">ID: ${c.externalId}</p>` : ''}
                         </div>
                         <div class="flex items-center gap-2">
+                            ${sampleBoxBadge(c.sampleBox)}
                             <span class="px-2 py-1 rounded text-xs font-medium ${badgeClass}">${badgeText}</span>
                             ${notes.length > 0 ? `<span class="material-symbols-outlined text-sm text-[#008060]">note</span>` : ''}
                         </div>
@@ -948,17 +1016,194 @@
 
     async function openNotes(companyId, companyName) {
         selectedCompanyId = companyId;
+        selectedCompany = companies.find(company => company.id === companyId) || null;
+        selectedSampleBox = selectedCompany?.sampleBox || { status: 'none' };
+        selectedCompanyIntelligence = null;
         document.getElementById('notes-company-name').textContent = companyName;
         document.getElementById('note-input').value = '';
+        document.getElementById('sample-box-note').value = selectedSampleBox.note || '';
+        document.getElementById('sample-box-follow-up').value = selectedSampleBox.followUpDueAt
+            ? selectedSampleBox.followUpDueAt.slice(0, 10)
+            : '';
+        document.querySelectorAll('#notes-drawer details').forEach(section => { section.open = false; });
         document.getElementById('notes-drawer').classList.add('active');
+        renderCompanyOverview();
+        renderSampleBox(selectedSampleBox);
+        document.getElementById('notes-list').innerHTML = '<p class="text-sm text-zinc-500 py-3">Loading notes…</p>';
+        document.getElementById('buying-intelligence').innerHTML = '<p class="text-sm text-zinc-500 py-3">Loading buying intelligence…</p>';
 
+        const openedCompanyId = companyId;
+        const [notesResult, sampleResult, intelligenceResult] = await Promise.allSettled([
+            window.shopifyApiFetch(companyApiUrl(companyId, '/notes')),
+            window.shopifyApiFetch(companyApiUrl(companyId, '/sample-box')),
+            window.shopifyApiFetch(companyApiUrl(companyId, '/intelligence')),
+        ]);
+        if (selectedCompanyId !== openedCompanyId) return;
+
+        if (notesResult.status === 'fulfilled' && notesResult.value.ok) {
+            const data = await notesResult.value.json();
+            const notes = data.notes || [];
+            if (selectedCompany) selectedCompany.notes = notes;
+            renderNotes(notes);
+        } else {
+            document.getElementById('notes-list').innerHTML = '<p class="text-sm text-red-600 py-3">Notes could not be loaded.</p>';
+        }
+
+        if (sampleResult.status === 'fulfilled' && sampleResult.value.ok) {
+            const data = await sampleResult.value.json();
+            selectedSampleBox = data.sampleBox || { status: 'none' };
+            if (selectedCompany) selectedCompany.sampleBox = selectedSampleBox;
+            renderSampleBox(selectedSampleBox);
+            renderCustomers();
+        } else {
+            document.getElementById('sample-box-details').innerHTML = '<p class="text-red-600">Sample-box status could not be loaded.</p>';
+        }
+
+        if (intelligenceResult.status === 'fulfilled' && intelligenceResult.value.ok) {
+            selectedCompanyIntelligence = await intelligenceResult.value.json();
+            renderBuyingIntelligence(selectedCompanyIntelligence);
+            renderCompanyOverview();
+        } else {
+            document.getElementById('buying-intelligence').innerHTML = '<p class="text-sm text-red-600 py-3">Buying intelligence could not be loaded.</p>';
+            renderCompanyOverview({ intelligenceError: true });
+        }
+    }
+
+    function formatMoney(amount, currencyCode = 'USD') {
+        return new Intl.NumberFormat(undefined, {
+            style: 'currency',
+            currency: currencyCode,
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        }).format(Number(amount) || 0);
+    }
+
+    function formatRollupDate(date) {
+        if (!date) return '—';
+        return new Date(`${date}T00:00:00.000Z`).toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            timeZone: 'UTC',
+        });
+    }
+
+    function renderCompanyOverview(options = {}) {
+        const perf = selectedCompany?.performance || {};
+        const lastOrder = perf.lastOrderDate
+            ? new Date(perf.lastOrderDate).toLocaleDateString()
+            : (companyHasOrdered(selectedCompany || {}) ? 'Order date unavailable' : 'No orders yet');
+        const cadence = perf.avgDaysBetweenOrders
+            ? `Typically every ${perf.avgDaysBetweenOrders} days`
+            : 'Not enough recent orders for cadence';
+        let revenue = '<p class="text-sm text-zinc-500">Loading range revenue…</p>';
+        if (selectedCompanyIntelligence?.status === 'ready') {
+            const intel = selectedCompanyIntelligence;
+            const delta = intel.deltaPercent === null
+                ? 'No prior-period revenue'
+                : `${intel.deltaPercent >= 0 ? '+' : ''}${intel.deltaPercent}% vs last year`;
+            revenue = `
+                <div class="grid grid-cols-2 gap-2">
+                    <div class="rounded-lg bg-emerald-50 border border-emerald-100 p-3">
+                        <p class="text-[11px] font-medium text-emerald-700">YTD rollup revenue</p>
+                        <p class="text-lg font-bold text-emerald-900">${formatMoney(intel.currentPeriod.revenue, intel.currencyCode)}</p>
+                        <p class="text-[11px] text-emerald-700">${formatRollupDate(intel.currentPeriod.startDate)}–${formatRollupDate(intel.currentPeriod.endDate)}</p>
+                    </div>
+                    <div class="rounded-lg bg-zinc-50 border border-zinc-200 p-3">
+                        <p class="text-[11px] font-medium text-zinc-600">Same dates last year</p>
+                        <p class="text-lg font-bold text-zinc-900">${formatMoney(intel.previousPeriod.revenue, intel.currencyCode)}</p>
+                        <p class="text-[11px] text-zinc-500">${delta}</p>
+                    </div>
+                </div>`;
+        } else if (selectedCompanyIntelligence?.status === 'backfilling') {
+            revenue = '<p class="text-sm text-zinc-500">Analytics still backfilling. Range revenue will appear when complete.</p>';
+        } else if (options.intelligenceError) {
+            revenue = '<p class="text-sm text-zinc-500">Range revenue is temporarily unavailable.</p>';
+        }
+        document.getElementById('company-overview').innerHTML = `
+            ${revenue}
+            <div class="grid grid-cols-2 gap-2 text-sm">
+                <div><p class="text-xs text-zinc-500">Last order</p><p class="font-medium">${escapeHtml(lastOrder)}</p></div>
+                <div><p class="text-xs text-zinc-500">Cadence</p><p class="font-medium">${escapeHtml(cadence)}</p></div>
+            </div>
+            <div><p class="text-xs text-zinc-500 mb-1">Sample box</p>${sampleBoxOverviewBadge(selectedSampleBox)}</div>`;
+    }
+
+    function sampleBoxOverviewBadge(sampleBox) {
+        if (sampleBox?.status === 'sent') return sampleBoxBadge(sampleBox);
+        if (sampleBox?.status === 'received') {
+            return '<span class="px-2 py-1 rounded text-xs font-medium badge-green">Sample received</span>';
+        }
+        return '<span class="px-2 py-1 rounded text-xs font-medium bg-zinc-100 text-zinc-600">No sample sent</span>';
+    }
+
+    function renderSampleBox(sampleBox) {
+        const details = document.getElementById('sample-box-details');
+        const labels = { none: 'No sample sent', sent: 'Awaiting receipt / follow-up', received: 'Received' };
+        const sentAt = sampleBox.sentAt ? new Date(sampleBox.sentAt).toLocaleDateString() : null;
+        const receivedAt = sampleBox.receivedAt ? new Date(sampleBox.receivedAt).toLocaleDateString() : null;
+        const followUp = sampleBox.followUpDueAt ? new Date(sampleBox.followUpDueAt).toLocaleDateString() : null;
+        details.innerHTML = `
+            <p class="font-medium text-zinc-900">${labels[sampleBox.status] || labels.none}</p>
+            ${sentAt ? `<p class="text-xs mt-1">Sent ${escapeHtml(sentAt)}${sampleBox.sentBy ? ` by ${escapeHtml(sampleBox.sentBy)}` : ''}</p>` : ''}
+            ${receivedAt ? `<p class="text-xs mt-1">Received ${escapeHtml(receivedAt)}</p>` : ''}
+            ${followUp && sampleBox.status === 'sent' ? `<p class="text-xs mt-1 text-amber-700">Follow up by ${escapeHtml(followUp)}</p>` : ''}`;
+        document.getElementById('mark-sample-received').disabled = sampleBox.status !== 'sent';
+        document.getElementById('mark-sample-received').classList.toggle('opacity-50', sampleBox.status !== 'sent');
+        document.getElementById('mark-sample-received').classList.toggle('cursor-not-allowed', sampleBox.status !== 'sent');
+        renderCompanyOverview();
+    }
+
+    function renderBuyingIntelligence(intelligence) {
+        const container = document.getElementById('buying-intelligence');
+        if (intelligence.status !== 'ready') {
+            container.innerHTML = '<p class="text-sm text-zinc-500 py-3">Analytics still backfilling. Product data will appear when complete.</p>';
+            return;
+        }
+        const products = intelligence.topProducts || [];
+        container.innerHTML = `
+            <p class="text-xs text-zinc-500 mb-3">Top products for the YTD range, ranked by distinct orders.</p>
+            <div class="divide-y divide-zinc-100">
+                ${products.map(product => `
+                    <div class="py-3 first:pt-0">
+                        <p class="text-sm font-medium text-zinc-900">${escapeHtml(product.title)}</p>
+                        <p class="text-xs text-zinc-500 mt-1">${product.orderCount} ${product.orderCount === 1 ? 'order' : 'orders'} · ${product.unitsSold} units · ${formatMoney(product.revenue, intelligence.currencyCode)}</p>
+                    </div>`).join('') || '<p class="text-sm text-zinc-500 py-3">No products ordered in this YTD range.</p>'}
+            </div>`;
+    }
+
+    async function updateSampleBox(status) {
+        if (!selectedCompanyId) return;
+        const note = document.getElementById('sample-box-note').value.trim();
+        const followUpDueAt = document.getElementById('sample-box-follow-up').value;
+        const appendNote = document.getElementById('sample-box-auto-note').checked;
+        const sentBy = currentUser?.name || currentUser?.email || 'Sales Team';
         try {
-            const res = await window.shopifyApiFetch(companyApiUrl(companyId, '/notes'));
-            if (!res.ok) throw new Error(await readApiError(res, 'Failed to load notes'));
+            const res = await window.shopifyApiFetch(companyApiUrl(selectedCompanyId, '/sample-box'), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status, note, followUpDueAt, appendNote, sentBy }),
+            });
+            if (!res.ok) throw new Error(await readApiError(res, 'Failed to update sample box'));
             const data = await res.json();
-            renderNotes(data.notes || []);
+            selectedSampleBox = data.sampleBox || { status: 'none' };
+            if (selectedCompany) {
+                selectedCompany.sampleBox = selectedSampleBox;
+                if (data.note) selectedCompany.notes = [data.note, ...(selectedCompany.notes || [])];
+            }
+            renderSampleBox(selectedSampleBox);
+            renderCustomers();
+            window.AppDataCache?.invalidatePrefix('/api/companies');
+            if (data.note) {
+                const notesRes = await window.shopifyApiFetch(companyApiUrl(selectedCompanyId, '/notes'));
+                if (notesRes.ok) {
+                    const notesData = await notesRes.json();
+                    renderNotes(notesData.notes || []);
+                }
+            }
+            showToast(`Sample marked ${status}`, 'success');
         } catch (e) {
-            showError('Failed to load notes: ' + e.message);
+            showError('Failed to update sample box: ' + e.message);
         }
     }
 
@@ -982,6 +1227,8 @@
     function closeNotes() {
         document.getElementById('notes-drawer').classList.remove('active');
         selectedCompanyId = null;
+        selectedCompany = null;
+        selectedCompanyIntelligence = null;
     }
 
     function renderNotes(notes) {
@@ -991,13 +1238,13 @@
             return `
                 <div class="p-3 bg-zinc-50 rounded-lg border border-zinc-200">
                     <div class="flex justify-between items-start mb-1">
-                        <p class="text-xs font-medium text-zinc-500">${note.author}</p>
+                        <p class="text-xs font-medium text-zinc-500">${escapeHtml(note.author)}</p>
                         <button onclick="deleteNote('${note.id}')" class="p-1 hover:bg-zinc-200 rounded text-zinc-400 hover:text-zinc-600 transition-colors">
                             <span class="material-symbols-outlined text-sm">close</span>
                         </button>
                     </div>
                     <p class="text-xs text-zinc-400 mb-2">${date}</p>
-                    <p class="text-sm text-zinc-700">${note.body}</p>
+                    <p class="text-sm text-zinc-700 whitespace-pre-wrap">${escapeHtml(note.body)}</p>
                 </div>
             `;
         }).join('') || '<p class="text-sm text-zinc-500 text-center py-4">No notes yet</p>';
@@ -1026,7 +1273,9 @@
             const notesRes = await window.shopifyApiFetch(companyApiUrl(selectedCompanyId, '/notes'));
             if (notesRes.ok) {
                 const data = await notesRes.json();
-                renderNotes(data.notes || []);
+                const notes = data.notes || [];
+                if (selectedCompany) selectedCompany.notes = notes;
+                renderNotes(notes);
                 // Update company list to show note count
                 renderCustomers();
             }
@@ -1051,7 +1300,9 @@
             const notesRes = await window.shopifyApiFetch(companyApiUrl(selectedCompanyId, '/notes'));
             if (notesRes.ok) {
                 const data = await notesRes.json();
-                renderNotes(data.notes || []);
+                const notes = data.notes || [];
+                if (selectedCompany) selectedCompany.notes = notes;
+                renderNotes(notes);
                 // Update company list to show note count
                 renderCustomers();
             }

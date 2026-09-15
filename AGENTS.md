@@ -24,11 +24,13 @@
 - **Day-since-last-order badges**: green ≤30 days, amber 31–89 days, red 90+ days. **Never** only when there is no spend, no orders, and no last-order date. `Company.totalSpent` can grow from linked buyer/draft/legacy orders while `Company.orders` stays empty — last order should also use contact customer `lastOrder`; if spend exists but no date, show **Ordered**, not Never.
 - **NEW partner**: 3 or fewer lifetime orders across company orders and linked buyer accounts; do not mark NEW when the company has spend but zero counted B2B company orders.
 - **Notes stored on Company metafield**: namespace `clnf`, key `crm_notes`, type `json`. Each note has `{ id, body, author, createdAt }`, newest first. First save auto-creates metafield definition.
+- **Company detail drawer**: the Customers row opens an Overview plus collapsed Notes, Sample box, and Buying intelligence accordions. Intelligence loads only on drawer open and remains explicitly unavailable until both order and product rollups are complete.
+- **Sample boxes stored on Company metafield**: namespace `clnf`, key `sample_box`, type `json`; status is `none`, `sent`, or `received`, with optional sent/received timestamps, sender, contents note, and follow-up date. Sent samples appear on list rows and in the follow-up filter.
 - **Notes API endpoints**:
   - `GET /api/companies/:companyId/notes` — fetch notes
   - `POST /api/companies/:companyId/notes` — add note (body `{ body, author }`)
   - `DELETE /api/companies/:companyId/notes/:noteId` — delete note
-- **Filters**: All Companies, Last 30 Days, 31–89 Days, 90+ Days, Never Ordered. Map tab stays as second tab.
+- **Filters**: All Companies, Last 30 Days, 31–89 Days, 90+ Days, Never Ordered, New Partners, and Sample sent · needs follow-up. Map tab stays as second tab.
 - **Permissions needed**: `read_companies`, `write_companies`, `read_orders` for fetching companies and order data; metafield updates need `write_companies`.
 
 ## Analytics (Analytics page — `/analytics`)
