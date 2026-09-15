@@ -1547,9 +1547,6 @@ app.get('/api/companies/:companyId/intelligence', validateAuthenticatedSession, 
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
     const companyId = decodeRouteParam(req.params.companyId);
-    if (!validators.id(companyId)) {
-      return res.status(400).json({ error: 'Invalid company ID format' });
-    }
 
     const shop = shopFromClient(client);
     if (!companyMetrics.enabled || !shop) {
@@ -3157,9 +3154,6 @@ app.get('/api/analytics/companies/:companyId', validateAuthenticatedSession, asy
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
     const companyId = decodeRouteParam(req.params.companyId);
-    if (!validators.id(companyId)) {
-      return res.status(400).json({ error: 'Invalid company ID format' });
-    }
 
     // Extract and validate date range parameters (for consistency, though not yet used by getCompanyAnalytics)
     const startDate = validateISODate(req.query.startDate);

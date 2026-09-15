@@ -877,6 +877,19 @@
         return Math.max(0, Math.floor((Date.now() - value) / (1000 * 60 * 60 * 24)));
     }
 
+    function formatTenure(days) {
+        if (days === null || days === undefined) return '';
+        if (days < 30) return `${days} ${days === 1 ? 'day' : 'days'}`;
+        if (days < 365) {
+            const months = Math.floor(days / 30);
+            return `${months} ${months === 1 ? 'month' : 'months'}`;
+        }
+        const years = Math.floor(days / 365);
+        const remainderMonths = Math.floor((days % 365) / 30);
+        const yearsText = `${years} ${years === 1 ? 'yr' : 'yrs'}`;
+        return remainderMonths > 0 ? `${yearsText} ${remainderMonths} mo` : yearsText;
+    }
+
     function sampleBoxBadge(sampleBox) {
         if (sampleBox?.status !== 'sent') return '';
         const days = daysSinceTimestamp(sampleBox.sentAt);
@@ -936,6 +949,7 @@
             const totalSpend = `$${(perf.totalSpend || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
             const sinceRaw = c.customerSince || c.createdAt;
             const customerSince = sinceRaw ? new Date(sinceRaw).toLocaleDateString() : '-';
+            const customerTenure = sinceRaw ? formatTenure(daysSinceTimestamp(sinceRaw)) : '';
             const isNew = isNewPartner(c);
             const notes = c.notes || [];
             const assignedRepCell = renderAssignedRepCell(c);
@@ -960,6 +974,7 @@
                         <div>
                             <p class="text-zinc-500 mb-1">Customer Since</p>
                             <p class="font-medium text-zinc-900">${customerSince}</p>
+                            ${customerTenure ? `<p class="text-zinc-400">${customerTenure}</p>` : ''}
                         </div>
                         <div>
                             <p class="text-zinc-500 mb-1">Total Spend</p>
