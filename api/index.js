@@ -639,9 +639,66 @@ const getCompanyAssignedStaffId = async (client, companyId) => {
   return assigned?.staffId || null;
 };
 
+const companyMetafieldDefinitions = new Map([
+  ['crm_notes', 'CRM notes'],
+  ['sample_box', 'Sample box'],
+]);
+const confirmedCompanyMetafieldDefinitions = new Set();
+
+async function ensureCompanyMetafieldDefinition(client, key) {
+  const name = companyMetafieldDefinitions.get(key);
+  const cacheKey = `${client?.session?.shop || 'unknown'}:${key}`;
+  if (!name || confirmedCompanyMetafieldDefinitions.has(cacheKey)) return;
+
+  const query = `
+    query getCompanyMetafieldDefinition($key: String!) {
+      metafieldDefinition(identifier: { namespace: "clnf", key: $key }, ownerType: COMPANY) {
+        id
+      }
+    }
+  `;
+  const existing = await shopifyGraphql(
+    client,
+    query,
+    { key },
+    `get company metafield definition ${key}`,
+  );
+  if (!existing?.metafieldDefinition) {
+    const mutation = `
+      mutation createCompanyMetafieldDefinition($definition: MetafieldDefinitionInput!) {
+        metafieldDefinitionCreate(definition: $definition) {
+          createdDefinition {
+            id
+          }
+          userErrors {
+            code
+            message
+          }
+        }
+      }
+    `;
+    const created = await shopifyGraphql(client, mutation, {
+      definition: {
+        name,
+        namespace: 'clnf',
+        key,
+        type: 'json',
+        ownerType: 'COMPANY',
+      },
+    }, `create company metafield definition ${key}`);
+    const errors = created?.metafieldDefinitionCreate?.userErrors || [];
+    const unexpected = errors.filter((error) => error.code !== 'TAKEN');
+    if (unexpected.length) {
+      throw new Error(unexpected.map((error) => error.message).join('; '));
+    }
+  }
+  confirmedCompanyMetafieldDefinitions.add(cacheKey);
+}
+
 // Metafields are written via the resource-agnostic metafieldsSet mutation.
 // (companyUpdate's CompanyInput no longer accepts an `id` or `metafields` field.)
-const setCompanyMetafield = async (client, companyId, key, value) => {
+const setCompanyMetafields = async (client, companyId, values) => {
+  await Promise.all(values.map(({ key }) => ensureCompanyMetafieldDefinition(client, key)));
   const mutation = `
     mutation setCompanyMetafields($metafields: [MetafieldsSetInput!]!) {
       metafieldsSet(metafields: $metafields) {
@@ -659,22 +716,24 @@ const setCompanyMetafield = async (client, companyId, key, value) => {
   `;
 
   const data = await shopifyGraphql(client, mutation, {
-    metafields: [
-      {
-        ownerId: companyId,
-        namespace: 'clnf',
-        key,
-        type: 'json',
-        value,
-      },
-    ],
-  }, `set company metafield ${key}`);
+    metafields: values.map(({ key, value }) => ({
+      ownerId: companyId,
+      namespace: 'clnf',
+      key,
+      type: 'json',
+      value,
+    })),
+  }, `set company metafields ${values.map(({ key }) => key).join(', ')}`);
 
   const userErrors = data?.metafieldsSet?.userErrors;
   if (userErrors && userErrors.length > 0) {
     throw new Error(userErrors.map((e) => e.message).join('; '));
   }
 };
+
+const setCompanyMetafield = (client, companyId, key, value) => (
+  setCompanyMetafields(client, companyId, [{ key, value }])
+);
 
 // Helper: calculate days between orders and stats
 const calculateOrderStats = (orderDates) => {
@@ -861,6 +920,9 @@ const fetchAllCompanies = async (client, { mode = 'full' } = {}) => {
             metafield(namespace: "clnf", key: "crm_notes") {
               value
             }
+            sampleBoxMetafield: metafield(namespace: "clnf", key: "sample_box") {
+              value
+            }
             assignedStaffMetafield: metafield(namespace: "clnf", key: "assigned_staff") {
               value
               updatedAt
@@ -900,6 +962,19 @@ const fetchAllCompanies = async (client, { mode = 'full' } = {}) => {
       console.warn('Failed to parse notes for company', company.id, e.message);
     }
 
+    let sampleBox = { status: 'none' };
+    try {
+      const sampleBoxValue = company.sampleBoxMetafield?.value;
+      if (sampleBoxValue) {
+        const parsed = JSON.parse(sampleBoxValue);
+        if (parsed && ['none', 'sent', 'received'].includes(parsed.status)) {
+          sampleBox = parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse sample box for company', company.id, e.message);
+    }
+
     // Parse assigned rep from metafield (app-owned; Shopify's native staff
     // assignments require the protected read_users scope, which this app doesn't have)
     let assignedStaff = null;
@@ -931,6 +1006,7 @@ const fetchAllCompanies = async (client, { mode = 'full' } = {}) => {
     };
 
     company.notes = notes;
+    company.sampleBox = sampleBox;
     company.assignedStaff = assignedStaff;
 
     return company;
@@ -1282,6 +1358,266 @@ app.delete('/api/companies/:companyId/notes/:noteId', validateAuthenticatedSessi
       return sendShopifyApiError(res, error);
     }
     console.error('DELETE /api/companies/:companyId/notes/:noteId', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+function parseSampleBox(value) {
+  if (!value) return { status: 'none' };
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || !['none', 'sent', 'received'].includes(parsed.status)) {
+      return { status: 'none' };
+    }
+    return parsed;
+  } catch {
+    return { status: 'none' };
+  }
+}
+
+function parseOptionalTimestamp(value, fieldName) {
+  if (!value) return null;
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    throw new Error(`${fieldName} must be a valid date`);
+  }
+  return timestamp.toISOString();
+}
+
+app.get('/api/companies/:companyId/sample-box', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+    const companyId = decodeRouteParam(req.params.companyId);
+    const query = `
+      query getCompanySampleBox($id: ID!) {
+        company(id: $id) {
+          id
+          metafield(namespace: "clnf", key: "sample_box") {
+            value
+          }
+        }
+      }
+    `;
+    const data = await shopifyGraphql(client, query, { id: companyId }, 'company sample box');
+    res.json({ sampleBox: parseSampleBox(data?.company?.metafield?.value) });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('GET /api/companies/:companyId/sample-box', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/companies/:companyId/sample-box', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+    const companyId = decodeRouteParam(req.params.companyId);
+    const status = String(req.body?.status || '');
+    if (!['none', 'sent', 'received'].includes(status)) {
+      return res.status(400).json({ error: 'status must be none, sent, or received' });
+    }
+
+    const getQuery = `
+      query getCompanySampleBoxAndNotes($id: ID!) {
+        company(id: $id) {
+          id
+          sampleBox: metafield(namespace: "clnf", key: "sample_box") {
+            value
+          }
+          notes: metafield(namespace: "clnf", key: "crm_notes") {
+            value
+          }
+        }
+      }
+    `;
+    const data = await shopifyGraphql(
+      client,
+      getQuery,
+      { id: companyId },
+      'fetch company sample box and notes',
+    );
+    if (!data?.company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    const current = parseSampleBox(data.company.sampleBox?.value);
+    const note = String(req.body?.note ?? req.body?.contents ?? '').trim();
+    const sentBy = String(req.body?.sentBy || '').trim();
+    if (note.length > 500) {
+      return res.status(400).json({ error: 'note must be 500 characters or fewer' });
+    }
+    if (sentBy.length > 120) {
+      return res.status(400).json({ error: 'sentBy must be 120 characters or fewer' });
+    }
+
+    let sampleBox;
+    try {
+      const requestedSentAt = parseOptionalTimestamp(req.body?.sentAt, 'sentAt');
+      const requestedReceivedAt = parseOptionalTimestamp(req.body?.receivedAt, 'receivedAt');
+      const requestedFollowUpAt = parseOptionalTimestamp(req.body?.followUpDueAt, 'followUpDueAt');
+      if (status === 'none') {
+        sampleBox = { status: 'none' };
+      } else if (status === 'sent') {
+        sampleBox = {
+          status,
+          sentAt: requestedSentAt
+            || (current.status === 'sent' ? current.sentAt : null)
+            || new Date().toISOString(),
+          receivedAt: null,
+          ...(sentBy ? { sentBy } : {}),
+          ...(note ? { note } : {}),
+          ...(requestedFollowUpAt ? { followUpDueAt: requestedFollowUpAt } : {}),
+        };
+      } else {
+        const sentAt = requestedSentAt || current.sentAt || null;
+        const followUpDueAt = requestedFollowUpAt || current.followUpDueAt || null;
+        sampleBox = {
+          status,
+          ...(sentAt ? { sentAt } : {}),
+          receivedAt: requestedReceivedAt || new Date().toISOString(),
+          ...(sentBy || current.sentBy ? { sentBy: sentBy || current.sentBy } : {}),
+          ...(note || current.note ? { note: note || current.note } : {}),
+          ...(followUpDueAt ? { followUpDueAt } : {}),
+        };
+      }
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    const values = [{ key: 'sample_box', value: JSON.stringify(sampleBox) }];
+    let autoNote = null;
+    if (req.body?.appendNote) {
+      let notes = [];
+      try {
+        notes = JSON.parse(data.company.notes?.value || '[]');
+        if (!Array.isArray(notes)) notes = [];
+      } catch {
+        notes = [];
+      }
+      const action = status === 'sent'
+        ? 'Sample box marked sent'
+        : status === 'received'
+          ? 'Sample box marked received'
+          : 'Sample box status cleared';
+      autoNote = {
+        id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
+        body: `${action}${note ? `: ${note}` : ''}`,
+        author: sentBy || 'Sales Team',
+        createdAt: new Date().toISOString(),
+      };
+      notes.unshift(autoNote);
+      values.push({ key: 'crm_notes', value: JSON.stringify(notes) });
+    }
+
+    await setCompanyMetafields(client, companyId, values);
+    res.json({ sampleBox, note: autoNote });
+  } catch (error) {
+    if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
+      return sendShopifyApiError(res, error);
+    }
+    console.error('PUT /api/companies/:companyId/sample-box', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+function companyIntelligenceRanges(now = new Date()) {
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const day = now.getUTCDate();
+  const previousYear = year - 1;
+  const previousMonthLastDay = new Date(Date.UTC(previousYear, month + 1, 0)).getUTCDate();
+  const previousDay = Math.min(day, previousMonthLastDay);
+  return {
+    current: {
+      startDate: `${year}-01-01`,
+      endDate: new Date(Date.UTC(year, month, day)).toISOString().slice(0, 10),
+    },
+    previous: {
+      startDate: `${previousYear}-01-01`,
+      endDate: new Date(Date.UTC(previousYear, month, previousDay)).toISOString().slice(0, 10),
+    },
+  };
+}
+
+app.get('/api/companies/:companyId/intelligence', validateAuthenticatedSession, async (req, res) => {
+  try {
+    const client = await getGraphqlClient(req, res);
+    if (!client) return res.status(401).json({ error: 'Unauthorized' });
+    const companyId = decodeRouteParam(req.params.companyId);
+    if (!validators.id(companyId)) {
+      return res.status(400).json({ error: 'Invalid company ID format' });
+    }
+
+    const shop = shopFromClient(client);
+    if (!companyMetrics.enabled || !shop) {
+      return res.json({
+        status: 'backfilling',
+        source: 'rollup',
+        message: 'Analytics still backfilling',
+      });
+    }
+    const [complete, productsReady, progress] = await Promise.all([
+      companyMetrics.isComplete(shop),
+      companyMetrics.isProductsReady(shop),
+      companyMetrics.backfillProgress(shop),
+    ]);
+    if (!complete || !productsReady) {
+      return res.json({
+        status: 'backfilling',
+        source: 'rollup',
+        message: 'Analytics still backfilling',
+        backfill: progress,
+      });
+    }
+
+    const ranges = companyIntelligenceRanges();
+    const [current, previous, topProducts] = await Promise.all([
+      companyMetrics.companyRange(
+        shop,
+        companyId,
+        ranges.current.startDate,
+        ranges.current.endDate,
+      ),
+      companyMetrics.companyRange(
+        shop,
+        companyId,
+        ranges.previous.startDate,
+        ranges.previous.endDate,
+      ),
+      companyMetrics.companyProductsRange(
+        shop,
+        companyId,
+        ranges.current.startDate,
+        ranges.current.endDate,
+        8,
+      ),
+    ]);
+    const deltaPercent = previous.revenue > 0
+      ? parseFloat((((current.revenue - previous.revenue) / previous.revenue) * 100).toFixed(1))
+      : null;
+    res.json({
+      status: 'ready',
+      source: 'rollup',
+      currencyCode: 'USD',
+      currentPeriod: {
+        ...ranges.current,
+        revenue: current.revenue,
+        orderCount: current.orderCount,
+      },
+      previousPeriod: {
+        ...ranges.previous,
+        revenue: previous.revenue,
+        orderCount: previous.orderCount,
+      },
+      deltaPercent,
+      topProducts,
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('GET /api/companies/:companyId/intelligence', error);
     res.status(500).json({ error: error.message });
   }
 });
