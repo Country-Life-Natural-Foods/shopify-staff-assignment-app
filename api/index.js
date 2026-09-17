@@ -652,7 +652,7 @@ async function ensureCompanyMetafieldDefinition(client, key) {
 
   const query = `
     query getCompanyMetafieldDefinition($key: String!) {
-      metafieldDefinition(identifier: { namespace: "clnf", key: $key }, ownerType: COMPANY) {
+      metafieldDefinition(identifier: { namespace: "clnf", key: $key, ownerType: COMPANY }) {
         id
       }
     }
