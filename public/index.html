@@ -32,11 +32,6 @@
     </style>
 </head>
 <body class="text-zinc-900 bg-[#f6faff]">
-<s-app-nav>
-    <s-link href="/analytics">Analytics</s-link>
-    <s-link href="/reports">Reports</s-link>
-</s-app-nav>
-
 <!-- Top Navigation -->
 <nav class="h-16 border-b border-zinc-200 bg-white flex items-center px-4 md:px-6 justify-between shadow-sm z-40 relative sticky top-0">
     <div class="flex items-center gap-4">
@@ -56,14 +51,6 @@
             <span class="material-symbols-outlined text-sm">person_add</span>
             Link My Account
         </button>
-        <a id="analytics-link" href="#" class="bg-white border border-zinc-200 text-zinc-700 px-4 py-2 rounded-md text-sm font-medium hover:bg-zinc-50 active:scale-[0.98] transition-all flex items-center gap-2">
-            <span class="material-symbols-outlined text-sm">monitoring</span>
-            Analytics
-        </a>
-        <a id="reports-link" href="#" style="display:none;" class="bg-white border border-zinc-200 text-zinc-700 px-4 py-2 rounded-md text-sm font-medium hover:bg-zinc-50 active:scale-[0.98] transition-all flex items-center gap-2">
-            <span class="material-symbols-outlined text-sm">summarize</span>
-            Reports
-        </a>
         <button id="sync-btn" onclick="syncMap()" class="bg-[#008060] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[#00654b] active:scale-[0.98] transition-all flex items-center gap-2">
             <span class="material-symbols-outlined text-sm">sync</span>
             Run Map Sync
@@ -505,9 +492,6 @@
         const qs = q.toString();
         return qs ? `${path}?${qs}` : path;
     }
-
-    document.getElementById('analytics-link').href = apiUrl('/analytics');
-    document.getElementById('reports-link').href = apiUrl('/reports');
 
     function setLoading(active, label = 'Loading') {
         if (active) window.pageProgress.begin({ total: 1, label });
@@ -1617,7 +1601,6 @@
         hasAnyManagerGlobal = !!data.hasAnyManager;
         document.getElementById('tab-staff').style.display = isManagerGlobal ? '' : 'none';
         document.getElementById('claim-admin-btn').style.display = data.hasAnyManager ? 'none' : '';
-        document.getElementById('reports-link').style.display = isManagerGlobal ? '' : 'none';
     }
 
     async function checkUserRole() {
