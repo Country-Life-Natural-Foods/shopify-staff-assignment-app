@@ -840,7 +840,7 @@ async function mapWithConcurrency(items, concurrency, mapper) {
 // `mode: 'commissions'` skips CRM-only fields (notes, contacts, spend stats)
 // so the commission rollup doesn't pay for a full Customers-tab payload
 // before it even starts the per-company revenue queries.
-const fetchAllCompanies = async (client, { mode = 'full' } = {}) => {
+const fetchAllCompanies = async (client, { mode = 'full', onProgress } = {}) => {
   if (!client) return [];
   const query = mode === 'commissions'
     ? `
@@ -1014,6 +1014,7 @@ const fetchAllCompanies = async (client, { mode = 'full' } = {}) => {
 
   let hasNextPage = true;
   let cursor = null;
+  let page = 0;
   const all = [];
 
   while (hasNextPage) {
@@ -1024,6 +1025,7 @@ const fetchAllCompanies = async (client, { mode = 'full' } = {}) => {
     }
     const edges = companiesData.edges || [];
     const pageInfo = companiesData.pageInfo || { hasNextPage: false, endCursor: null };
+    page += 1;
 
     // In commissions mode, skip expensive enrichment (notes, performance stats);
     // we only need id, name, and assigned staff data for commission calculations
@@ -1050,6 +1052,14 @@ const fetchAllCompanies = async (client, { mode = 'full' } = {}) => {
 
     hasNextPage = Boolean(pageInfo.hasNextPage);
     cursor = pageInfo.endCursor || null;
+    if (typeof onProgress === 'function') {
+      onProgress({
+        done: page,
+        total: hasNextPage ? page + 1 : page,
+        loaded: all.length,
+        hasNextPage,
+      });
+    }
   }
   return all;
 };
@@ -1197,9 +1207,34 @@ app.get('/api/companies', validateAuthenticatedSession, async (req, res) => {
   try {
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
-    const companies = await fetchAllCompanies(client);
-    res.json({ edges: companies.map(c => ({ node: c })) });
+    const stream = wantsNdjson(req);
+    const companies = await fetchAllCompanies(client, {
+      onProgress: stream
+        ? (progress) => {
+          writeNdjson(res, {
+            type: 'progress',
+            phase: 'companies',
+            done: progress.done,
+            total: progress.total,
+            loaded: progress.loaded,
+            label: `Loaded ${progress.loaded} companies`,
+          });
+        }
+        : undefined,
+    });
+    const payload = { edges: companies.map(c => ({ node: c })) };
+    if (stream) {
+      writeNdjson(res, { type: 'result', ...payload });
+      res.end();
+      return;
+    }
+    res.json(payload);
   } catch (error) {
+    if (res.headersSent) {
+      writeNdjson(res, { type: 'error', error: error.message || 'Request failed' });
+      res.end();
+      return;
+    }
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
       return sendShopifyApiError(res, error);
     }

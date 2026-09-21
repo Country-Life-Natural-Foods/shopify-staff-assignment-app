@@ -23,6 +23,7 @@
       width: 100%;
       height: 3px;
       background: rgba(0, 128, 96, 0.12);
+      overflow: hidden;
     }
     #${ROOT_ID} .page-progress-fill {
       height: 100%;
@@ -30,6 +31,15 @@
       background: #008060;
       transform-origin: left center;
       transition: width 180ms ease-out;
+    }
+    #${ROOT_ID}.is-unknown .page-progress-fill {
+      width: 32% !important;
+      transition: none;
+      animation: page-progress-indeterminate 1.1s ease-in-out infinite;
+    }
+    @keyframes page-progress-indeterminate {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(420%); }
     }
     #${ROOT_ID} .page-progress-label {
       display: none;
@@ -97,13 +107,14 @@
     const root = document.getElementById(ROOT_ID);
     const fill = root.querySelector('[data-progress-fill]');
     const labelEl = root.querySelector('[data-progress-label]');
-    const pct = current.total > 0
+    const known = current.total > 0;
+    const pct = known
       ? Math.min(100, Math.round((current.done / current.total) * 100))
       : 0;
     fill.style.width = `${pct}%`;
     fill.setAttribute('aria-valuenow', String(pct));
-    const remaining = current.total > 0 ? Math.max(0, current.total - current.done) : null;
-    if (current.total > 1 && remaining !== null) {
+    const remaining = known ? Math.max(0, current.total - current.done) : null;
+    if (known && current.done > 0 && current.total > 1 && remaining !== null) {
       labelEl.textContent = remaining === 0
         ? `${current.label} · done`
         : `${current.label} · ${current.done} of ${current.total} (${remaining} left)`;
@@ -111,6 +122,7 @@
       labelEl.textContent = current.label || 'Loading';
     }
     root.hidden = false;
+    root.classList.toggle('is-unknown', !known);
     root.classList.add('is-active');
   }
 

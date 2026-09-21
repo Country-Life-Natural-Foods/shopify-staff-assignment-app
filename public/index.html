@@ -29,6 +29,26 @@
         .tab-active { border-b-2 border-[#008060] color: #008060; }
         .notes-drawer { transform: translateX(100%); transition: transform 0.3s ease; }
         .notes-drawer.active { transform: translateX(0); }
+        .filters-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 0.75rem 1rem;
+        }
+        .filter-btns {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.5rem;
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+        .company-sort {
+            flex: 0 0 15rem;
+            width: 15rem;
+            margin-left: auto;
+        }
     </style>
 </head>
 <body class="text-zinc-900 bg-[#f6faff]">
@@ -95,17 +115,22 @@
                     <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 text-sm">search</span>
                     <input id="company-search" type="text" placeholder="Search by company name..." class="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-md text-sm focus:ring-2 focus:ring-[#008060] focus:border-[#008060] outline-none transition-all" onkeyup="onCompanySearchInput()"/>
                 </div>
-                <div class="flex flex-wrap items-center gap-2">
-                    <button onclick="setFilter('all')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-[#008060] text-white" data-filter="all">All Companies</button>
-                    <button onclick="setFilter('30')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="30">Last 30 Days</button>
-                    <button onclick="setFilter('89')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="89">31-89 Days</button>
-                    <button onclick="setFilter('90')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="90">90+ Days</button>
-                    <button onclick="setFilter('never')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="never">Never Ordered</button>
-                    <button onclick="setFilter('new')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="new">New Partners</button>
-                    <button onclick="setFilter('sample-follow-up')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="sample-follow-up">Sample sent · needs follow-up</button>
-                    <span class="text-xs text-zinc-400 ml-2 hidden sm:inline">Sort</span>
-                    <button type="button" onclick="setSort('stale')" class="sort-btn px-3 py-1 rounded-md text-sm font-medium bg-[#008060] text-white" data-sort="stale">Longest since order</button>
-                    <button type="button" onclick="setSort('recent')" class="sort-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-sort="recent">Most recent order</button>
+                <div class="filters-row">
+                    <div class="filter-btns">
+                        <button onclick="setFilter('all')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-[#008060] text-white" data-filter="all">All Companies</button>
+                        <button onclick="setFilter('30')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="30">Last 30 Days</button>
+                        <button onclick="setFilter('89')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="89">31-89 Days</button>
+                        <button onclick="setFilter('90')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="90">90+ Days</button>
+                        <button onclick="setFilter('never')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="never">Never Ordered</button>
+                        <button onclick="setFilter('new')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="new">New Partners</button>
+                        <button onclick="setFilter('sample-follow-up')" class="filter-btn px-3 py-1 rounded-md text-sm font-medium bg-zinc-200 text-zinc-900 hover:bg-zinc-300 transition-colors" data-filter="sample-follow-up">Sample sent · needs follow-up</button>
+                    </div>
+                    <div class="company-sort">
+                        <s-select id="company-sort" label="Sort" name="sort" value="stale">
+                            <s-option value="stale">Longest since order</s-option>
+                            <s-option value="recent">Most recent order</s-option>
+                        </s-select>
+                    </div>
                 </div>
             </div>
         </div>
@@ -678,17 +703,17 @@
     }
 
     function setSort(sort) {
-        currentSort = sort;
-        document.querySelectorAll('.sort-btn').forEach(btn => {
-            const isActive = btn.dataset.sort === sort;
-            btn.classList.toggle('bg-[#008060]', isActive);
-            btn.classList.toggle('text-white', isActive);
-            btn.classList.toggle('bg-zinc-200', !isActive);
-            btn.classList.toggle('text-zinc-900', !isActive);
-        });
+        const next = sort === 'recent' ? 'recent' : 'stale';
+        currentSort = next;
+        const select = document.getElementById('company-sort');
+        if (select && select.value !== next) select.value = next;
         paginationState.companies.page = 1;
         renderCustomers();
     }
+
+    document.getElementById('company-sort').addEventListener('change', (event) => {
+        setSort(event.currentTarget.value);
+    });
 
     function daysSinceSortValue(company) {
         const days = company.performance?.daysSinceLastOrder;
@@ -758,8 +783,36 @@
         return Boolean(cachedCompanies);
     }
 
-    async function refreshCompanies() {
-        const { data, fromCache, revalidate } = await window.AppDataCache.loadJson(apiUrl('/api/companies'));
+    function applyCompanyPageProgress(msg) {
+        if (!msg || msg.phase !== 'companies') return;
+        window.pageProgress.set({
+            done: msg.done,
+            total: msg.total,
+            label: msg.label || 'Fetching companies',
+        });
+    }
+
+    async function refreshCompanies(onProgress) {
+        const url = apiUrl('/api/companies');
+        const cached = window.AppDataCache.peek(url);
+        if (cached) {
+            applyCompaniesPayload(cached);
+            const { revalidate } = await window.AppDataCache.loadJson(url);
+            if (revalidate) {
+                revalidate.then((fresh) => {
+                    if (fresh?.data) applyCompaniesPayload(fresh.data);
+                });
+            }
+            return cached;
+        }
+        if (typeof onProgress === 'function') {
+            const { res, data } = await window.fetchJsonWithProgress(url, {}, onProgress);
+            if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+            window.AppDataCache.set(url, data);
+            applyCompaniesPayload(data);
+            return data;
+        }
+        const { data, fromCache, revalidate } = await window.AppDataCache.loadJson(url);
         if (!fromCache) applyCompaniesPayload(data);
         if (revalidate) {
             revalidate.then((fresh) => {
@@ -789,14 +842,14 @@
 
     async function loadData(silent = false, onStep) {
         const ownBar = !silent && typeof onStep !== 'function';
-        if (ownBar) window.pageProgress.begin({ total: 2, label: 'Loading dashboard' });
+        if (ownBar) window.pageProgress.begin({ total: 0, label: 'Fetching companies' });
         const step = (label) => {
             if (typeof onStep === 'function') onStep(label);
-            else if (ownBar) window.pageProgress.advance(label);
+            else if (ownBar) window.pageProgress.set({ label });
         };
         try {
             await Promise.all([
-                refreshCompanies().then(() => step('Companies loaded')),
+                refreshCompanies(ownBar ? applyCompanyPageProgress : undefined).then(() => step('Companies loaded')),
                 refreshLocations().then(() => step('Map locations loaded')),
             ]);
             if (ownBar) window.pageProgress.finish();
@@ -1861,23 +1914,19 @@
         const painted = paintDashboardFromCache();
         window.AppDataCache?.prefetchPages(['/analytics', '/reports']);
         if (!painted) {
-            window.pageProgress.begin({ total: 4, label: 'Loading dashboard' });
+            window.pageProgress.begin({ total: 0, label: 'Fetching companies' });
         }
         try {
-            const companiesP = refreshCompanies();
+            const companiesP = refreshCompanies(painted ? undefined : applyCompanyPageProgress);
             const locationsP = refreshLocations();
             const staffP = loadStaff(true);
             const roleP = checkUserRole();
 
             await companiesP;
-            if (!painted) window.pageProgress.advance('Companies loaded');
+            if (!painted) window.pageProgress.set({ label: 'Companies loaded' });
             window.AppDataCache?.whenIdle(() => window.AppDataCache.warmAnalytics());
 
-            await Promise.all([
-                roleP.then(() => { if (!painted) window.pageProgress.advance('Account ready'); }),
-                staffP.then(() => { if (!painted) window.pageProgress.advance('Staff loaded'); }),
-                locationsP.then(() => { if (!painted) window.pageProgress.advance('Map locations loaded'); }),
-            ]);
+            await Promise.all([roleP, staffP, locationsP]);
             updateClaimStaffVisibility();
             if (!painted) window.pageProgress.finish();
         } catch (e) {
