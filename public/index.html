@@ -1149,11 +1149,27 @@
             ? `Typically every ${perf.avgDaysBetweenOrders} days`
             : 'Not enough recent orders for cadence';
         let revenue = '<p class="text-sm text-zinc-500">Loading range revenue…</p>';
+        let contactCheckoutNotice = '';
         if (selectedCompanyIntelligence?.status === 'ready') {
             const intel = selectedCompanyIntelligence;
             const delta = intel.deltaPercent === null
                 ? 'No prior-period revenue'
                 : `${intel.deltaPercent >= 0 ? '+' : ''}${intel.deltaPercent}% vs last year`;
+            const contact = intel.contactCheckout || {};
+            const contactCount = contact.orderCount || intel.currentPeriod?.contactCheckoutOrderCount || 0;
+            const contactRevenue = contact.revenue || intel.currentPeriod?.contactCheckoutRevenue || 0;
+            if (contactCount > 0) {
+                contactCheckoutNotice = `
+                    <div class="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm">
+                        <p class="font-medium text-amber-900">Ordering outside wholesale checkout</p>
+                        <p class="text-amber-800 mt-1">
+                            ${contactCount} YTD ${contactCount === 1 ? 'order' : 'orders'}
+                            (${formatMoney(contactRevenue, intel.currencyCode)}) came from a customer account,
+                            not the B2B company checkout. Ask them to order through their wholesale account
+                            so they get partner pricing and discounts.
+                        </p>
+                    </div>`;
+            }
             revenue = `
                 <div class="grid grid-cols-2 gap-2">
                     <div class="rounded-lg bg-emerald-50 border border-emerald-100 p-3">
@@ -1174,6 +1190,7 @@
         }
         document.getElementById('company-overview').innerHTML = `
             ${revenue}
+            ${contactCheckoutNotice}
             <div class="grid grid-cols-2 gap-2 text-sm">
                 <div><p class="text-xs text-zinc-500">Last order</p><p class="font-medium">${escapeHtml(lastOrder)}</p></div>
                 <div><p class="text-xs text-zinc-500">Cadence</p><p class="font-medium">${escapeHtml(cadence)}</p></div>
@@ -1213,7 +1230,16 @@
             return;
         }
         const products = intelligence.topProducts || [];
+        const contact = intelligence.contactCheckout || {};
+        const contactCount = contact.orderCount || 0;
+        const contactNote = contactCount > 0
+            ? `<p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+                    ${contactCount} of these YTD ${contactCount === 1 ? 'order was' : 'orders were'} placed
+                    from a customer login instead of wholesale checkout — coach them to use the company account for partner discounts.
+               </p>`
+            : '';
         container.innerHTML = `
+            ${contactNote}
             <p class="text-xs text-zinc-500 mb-3">Top products for the YTD range, ranked by distinct orders.</p>
             <div class="divide-y divide-zinc-100">
                 ${products.map(product => `
