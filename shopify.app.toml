@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "e33dee3eb5ba764d24d3064d6a070c11"
-name = "Staff Assignment Manager"
+name = "Wholesale CRM"
 application_url = "https://shopify-staff-assignment-app-pi.vercel.app"
 embedded = true
 
