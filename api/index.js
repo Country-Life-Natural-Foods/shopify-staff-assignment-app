@@ -265,7 +265,8 @@ const COMMISSION_AGGREGATION_TIMEOUT_MS = 55000;
 // Sized against vercel.json's 300s maxDuration, not against each other by
 // accident: the chunk stops paging at 240s, leaving 30s to write its terminal
 // status before the guard fires and another 30s before Vercel hard-kills the
-// invocation. The cron fires every 5 minutes, so runs never overlap.
+// invocation. The cron fires every minute; claimBackfill's lease plus the
+// per-page heartbeat keep a second invocation from paging the same cursor.
 const METRICS_CRON_TIMEOUT_MS = 270000;
 const METRICS_CRON_WORK_MS = 240000;
 
@@ -2939,16 +2940,29 @@ app.post('/api/metrics/backfill', validateAuthenticatedSession, async (req, res)
 
 function authorizeMetricsCron(req) {
   const secret = String(process.env.CRON_SECRET || '').trim();
-  const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  if (secret) {
-    return req.headers['x-cron-secret'] === secret || bearer === secret;
+  const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+  if (secret && (req.headers['x-cron-secret'] === secret || bearer === secret)) {
+    return true;
   }
-  return req.headers['x-vercel-cron'] === '1';
+  // Older Vercel Cron set `x-vercel-cron: 1`. Current invocations set
+  // `x-vercel-cron-schedule` to the expression (for example `* * * * *`) and
+  // use user-agent `vercel-cron/1.0`. Vercel strips client-supplied
+  // `x-vercel-*` headers, so the schedule header is not spoofable. CRON_SECRET
+  // is optional; when it is unset, that header is what lets the backfill run.
+  if (req.headers['x-vercel-cron'] === '1') return true;
+  const schedule = String(req.headers['x-vercel-cron-schedule'] || '').trim();
+  return schedule.length > 0;
 }
 
 app.get('/api/metrics/cron-backfill', async (req, res) => {
   try {
     if (!authorizeMetricsCron(req)) {
+      console.warn('[metrics-cron] unauthorized', {
+        hasSchedule: Boolean(req.headers['x-vercel-cron-schedule']),
+        hasLegacyCron: Boolean(req.headers['x-vercel-cron']),
+        hasAuthorization: Boolean(req.headers.authorization),
+        userAgent: String(req.headers['user-agent'] || '').slice(0, 48),
+      });
       return res.status(401).json({ error: 'Unauthorized' });
     }
     if (!companyMetrics.enabled) {
