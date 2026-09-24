@@ -1048,15 +1048,6 @@ async function fetchCompaniesRevenueSince(client, jobs, onProgress) {
   const shop = shopFromClient(client);
   if (companyMetrics.enabled && shop && jobs.length) {
     try {
-      if (!(await companyMetrics.isComplete(shop))) {
-        await companyMetrics.backfillChunk(shop, client, {
-          maxPages: 8,
-          maxMs: 18000,
-          onProgress: typeof onProgress === 'function'
-            ? (p) => onProgress({ ...p, phase: 'rollup' })
-            : undefined,
-        });
-      }
       if (await companyMetrics.isComplete(shop)) {
         const sums = await companyMetrics.sumJobs(shop, jobs);
         if (typeof onProgress === 'function') {
@@ -2357,19 +2348,10 @@ async function ensureRollupReady(client, { products } = {}) {
     return { shop, ready: false, complete: false, productsReady: false, coverage: null, progress: null };
   }
   try {
-    const completeBefore = typeof companyMetrics.isComplete === 'function'
-      ? await companyMetrics.isComplete(shop)
-      : false;
-    if (!completeBefore) {
-      await companyMetrics.backfillChunk(shop, client, { maxPages: 20, maxMs: 25000 });
-    }
     const complete = typeof companyMetrics.isComplete === 'function'
       ? await companyMetrics.isComplete(shop)
       : false;
     const ready = await companyMetrics.isReady(shop);
-    if (products && ready && !(await companyMetrics.isProductsReady(shop))) {
-      await companyMetrics.backfillProductChunk(shop, client, { maxPages: 6, maxMs: 18000 });
-    }
     const coverage = ready && typeof companyMetrics.orderCoverage === 'function'
       ? await companyMetrics.orderCoverage(shop)
       : null;
@@ -2380,7 +2362,7 @@ async function ensureRollupReady(client, { products } = {}) {
       shop,
       ready,
       complete,
-      productsReady: ready && (await companyMetrics.isProductsReady(shop)),
+      productsReady: Boolean(products) && ready && (await companyMetrics.isProductsReady(shop)),
       coverage,
       progress,
     };
