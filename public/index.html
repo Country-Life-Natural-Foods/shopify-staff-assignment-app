@@ -232,14 +232,16 @@
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div class="bg-gradient-to-br from-emerald-50 to-green-50 rounded-xl p-5 border border-emerald-200">
-                        <p class="text-sm font-medium text-emerald-600 mb-2">My Total Commission</p>
+                        <p class="text-sm font-medium text-emerald-600 mb-2" id="commission-headline-label">My Total Commission</p>
                         <h3 class="text-3xl font-bold text-emerald-900" id="my-commission">$0.00</h3>
-                        <p class="text-xs text-emerald-600 mt-2" id="commission-period">Current Month</p>
+                        <p class="text-xs text-emerald-600 mt-2" id="commission-period">This month</p>
+                        <p class="text-xs text-emerald-700/80 mt-1" id="my-commission-lifetime"></p>
                     </div>
                     <div class="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-5 border border-blue-200">
-                        <p class="text-sm font-medium text-blue-600 mb-2">My Total Revenue</p>
+                        <p class="text-sm font-medium text-blue-600 mb-2" id="revenue-headline-label">My Total Revenue</p>
                         <h3 class="text-3xl font-bold text-blue-900" id="my-revenue">$0.00</h3>
                         <p class="text-xs text-blue-600 mt-2" id="commission-count">0 Companies</p>
+                        <p class="text-xs text-blue-700/80 mt-1" id="my-revenue-lifetime"></p>
                     </div>
                     <div class="bg-gradient-to-br from-violet-50 to-purple-50 rounded-xl p-5 border border-violet-200">
                         <p class="text-sm font-medium text-violet-600 mb-2">Commission Rate</p>
@@ -1444,24 +1446,49 @@
     function renderCommissions() {
         if (!commissionData) return;
 
-        const { isManager, commissions } = commissionData;
+        const { isManager, commissions, period } = commissionData;
+        const periodLabel = period?.label || 'This month';
 
-        // Find current user's commission data for summary cards
-        let myData = null;
-        if (!isManager && commissions && commissions.length > 0) {
-            myData = commissions[0];
+        let summaryCommission = 0;
+        let summaryRevenue = 0;
+        let summaryLifetimeCommission = 0;
+        let summaryLifetimeRevenue = 0;
+        let myRate = 0;
+        let companyCount = 0;
+
+        if (isManager && commissions?.length) {
+            summaryCommission = commissions.reduce((sum, r) => sum + (r.totalCommission || 0), 0);
+            summaryRevenue = commissions.reduce((sum, r) => sum + (r.totalRevenue || 0), 0);
+            summaryLifetimeCommission = commissions.reduce((sum, r) => sum + (r.lifetimeTotalCommission || 0), 0);
+            summaryLifetimeRevenue = commissions.reduce((sum, r) => sum + (r.lifetimeTotalRevenue || 0), 0);
+            companyCount = commissions.reduce((sum, r) => sum + (r.companies?.length || 0), 0);
+            document.getElementById('commission-headline-label').textContent = 'Team Commission';
+            document.getElementById('revenue-headline-label').textContent = 'Team Revenue';
+        } else if (commissions?.length > 0) {
+            const myData = commissions[0];
+            summaryCommission = myData.totalCommission || 0;
+            summaryRevenue = myData.totalRevenue || 0;
+            summaryLifetimeCommission = myData.lifetimeTotalCommission || 0;
+            summaryLifetimeRevenue = myData.lifetimeTotalRevenue || 0;
+            myRate = myData.commissionTier || 0;
+            companyCount = myData.companies?.length || 0;
+            document.getElementById('commission-headline-label').textContent = 'My Total Commission';
+            document.getElementById('revenue-headline-label').textContent = 'My Total Revenue';
         }
 
-        // Update summary cards
-        const myCommission = myData?.totalCommission || 0;
-        const myRevenue = myData?.totalRevenue || 0;
-        const myRate = myData?.commissionTier || 0;
-        const companyCount = myData?.companies?.length || 0;
-
-        document.getElementById('my-commission').textContent = `$${myCommission.toFixed(2)}`;
-        document.getElementById('my-revenue').textContent = `$${myRevenue.toFixed(2)}`;
-        document.getElementById('my-rate').textContent = `${myRate}%`;
+        document.getElementById('my-commission').textContent = `$${summaryCommission.toFixed(2)}`;
+        document.getElementById('my-revenue').textContent = `$${summaryRevenue.toFixed(2)}`;
+        document.getElementById('my-rate').textContent = isManager ? '—' : `${myRate}%`;
         document.getElementById('commission-count').textContent = `${companyCount} Companies`;
+        document.getElementById('commission-period').textContent = periodLabel;
+        document.getElementById('my-commission-lifetime').textContent =
+            summaryLifetimeCommission > 0
+                ? `$${summaryLifetimeCommission.toFixed(2)} lifetime since assignment`
+                : '';
+        document.getElementById('my-revenue-lifetime').textContent =
+            summaryLifetimeRevenue > 0
+                ? `$${summaryLifetimeRevenue.toFixed(2)} lifetime since assignment`
+                : '';
 
         // Render commission list
         const displayData = commissions || [];
@@ -1477,12 +1504,17 @@
             // Payout is earned only from orders placed since each company was
             // assigned to this rep, not the company's full order history — show
             // the "since" date per company so the numbers are self-explanatory.
+            const lifetimeCommission = staff?.lifetimeTotalCommission || 0;
+            const lifetimeRevenue = staff?.lifetimeTotalRevenue || 0;
             const companyBreakdown = companyRows.length > 0 ? `
                 <div class="mt-3 pt-3 border-t border-zinc-100 space-y-1.5">
                     ${companyRows.map(c => `
                         <div class="flex justify-between items-center text-xs">
                             <span class="text-zinc-600">${c.companyName || 'Unknown company'}${c.assignedAt ? ` <span class="text-zinc-400">· since ${new Date(c.assignedAt).toLocaleDateString()}</span>` : ''}</span>
-                            <span class="font-medium text-zinc-900 flex-shrink-0 ml-2">$${(c.revenue || 0).toFixed(2)} <span class="text-emerald-600">(+$${(c.commission || 0).toFixed(2)})</span></span>
+                            <span class="font-medium text-zinc-900 flex-shrink-0 ml-2 text-right">
+                                <span>$${(c.revenue || 0).toFixed(2)} <span class="text-emerald-600">(+$${(c.commission || 0).toFixed(2)})</span></span>
+                                ${(c.lifetimeCommission || 0) > 0 ? `<br><span class="text-zinc-400 font-normal">$${(c.lifetimeRevenue || 0).toFixed(2)} lifetime (+$${(c.lifetimeCommission || 0).toFixed(2)})</span>` : ''}
+                            </span>
                         </div>
                     `).join('')}
                 </div>
@@ -1497,7 +1529,8 @@
                         </div>
                         <div class="text-right">
                             <p class="text-2xl font-bold text-emerald-600">$${commission.toFixed(2)}</p>
-                            <p class="text-xs text-zinc-500 mt-1">${tier}% of $${revenue.toFixed(2)} earned since assignment</p>
+                            <p class="text-xs text-zinc-500 mt-1">${tier}% of $${revenue.toFixed(2)} this month</p>
+                            ${lifetimeCommission > 0 ? `<p class="text-xs text-zinc-400 mt-0.5">$${lifetimeCommission.toFixed(2)} lifetime (+$${lifetimeRevenue.toFixed(2)} revenue)</p>` : ''}
                         </div>
                     </div>
                     ${companyBreakdown}

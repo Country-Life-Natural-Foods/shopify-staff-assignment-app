@@ -2073,6 +2073,142 @@ function resolveReportMonth(monthParam) {
   return { month: monthStr, label, start, end };
 }
 
+// Commissions tab uses the still-open UTC calendar month (same window as
+// Reports when that month is selected).
+function resolveCurrentMonth() {
+  const now = new Date();
+  const monthStr = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+  return resolveReportMonth(monthStr);
+}
+
+function effectiveSinceForPeriod(assignedAtIso, period) {
+  const assignedAt = assignedAtIso ? new Date(assignedAtIso) : null;
+  const effectiveSince = assignedAt && assignedAt > period.start ? assignedAt : period.start;
+  if (effectiveSince > period.end) return null;
+  return effectiveSince.toISOString();
+}
+
+function periodPayload(period) {
+  return {
+    month: period.month,
+    label: period.label,
+    start: period.start.toISOString(),
+    end: period.end.toISOString(),
+  };
+}
+
+async function fetchLifetimeAndMonthRevenues(client, commissionJobs, period, onProgress) {
+  const lifetimeSpecs = commissionJobs.map((job) => ({
+    companyId: job.company.id,
+    sinceIso: job.assigned.assignedAt,
+  }));
+
+  const monthSpecs = [];
+  for (let i = 0; i < commissionJobs.length; i += 1) {
+    const job = commissionJobs[i];
+    const sinceIso = effectiveSinceForPeriod(job.assigned.assignedAt, period);
+    if (sinceIso) {
+      monthSpecs.push({
+        jobIndex: i,
+        companyId: job.company.id,
+        sinceIso,
+        untilIso: period.end.toISOString(),
+      });
+    }
+  }
+
+  const totalSteps = lifetimeSpecs.length + monthSpecs.length;
+  let done = 0;
+  const bump = () => {
+    done += 1;
+    if (typeof onProgress === 'function') {
+      onProgress({
+        phase: 'revenue',
+        done,
+        total: totalSteps || 1,
+        label: 'Calculating commissions',
+      });
+    }
+  };
+
+  const lifetimeRevenues = await fetchCompaniesRevenueSince(
+    client,
+    lifetimeSpecs,
+    totalSteps
+      ? () => bump()
+      : undefined,
+  );
+
+  const monthRevenuesByJobIndex = new Array(commissionJobs.length).fill(null);
+  if (monthSpecs.length) {
+    const monthFetched = await fetchCompaniesRevenueSince(
+      client,
+      monthSpecs.map((s) => ({
+        companyId: s.companyId,
+        sinceIso: s.sinceIso,
+        untilIso: s.untilIso,
+      })),
+      totalSteps
+        ? () => bump()
+        : undefined,
+    );
+    monthSpecs.forEach((spec, j) => {
+      monthRevenuesByJobIndex[spec.jobIndex] = monthFetched[j];
+    });
+  }
+
+  const emptyRevenue = { totalSpend: 0, orderCount: 0, lastOrderDate: null };
+  return {
+    lifetimeRevenues,
+    monthRevenuesByJobIndex: monthRevenuesByJobIndex.map((r) => r || emptyRevenue),
+  };
+}
+
+function aggregateCommissionsFromJobs(commissionJobs, lifetimeRevenues, monthRevenuesByJobIndex) {
+  const commissionsMap = {};
+  commissionJobs.forEach((job, i) => {
+    const { company, assigned, staffRecord } = job;
+    if (!commissionsMap[staffRecord.id]) {
+      commissionsMap[staffRecord.id] = {
+        staffId: staffRecord.id,
+        name: staffRecord.name,
+        email: staffRecord.email,
+        commissionTier: staffRecord.commissionTier,
+        companies: [],
+        totalRevenue: 0,
+        totalCommission: 0,
+        lifetimeTotalRevenue: 0,
+        lifetimeTotalCommission: 0,
+      };
+    }
+
+    const lifetimeRevenue = lifetimeRevenues[i].totalSpend;
+    const lifetimeCommission = (lifetimeRevenue * staffRecord.commissionTier) / 100;
+    const monthRevenue = monthRevenuesByJobIndex[i].totalSpend;
+    const monthCommission = (monthRevenue * staffRecord.commissionTier) / 100;
+
+    commissionsMap[staffRecord.id].companies.push({
+      companyId: company.id,
+      companyName: company.name,
+      revenue: monthRevenue,
+      commission: monthCommission,
+      lifetimeRevenue,
+      lifetimeCommission,
+      assignedAt: assigned.assignedAt || null,
+      lastOrderDate: company.performance?.lastOrderDate,
+    });
+
+    commissionsMap[staffRecord.id].totalRevenue += monthRevenue;
+    commissionsMap[staffRecord.id].totalCommission += monthCommission;
+    commissionsMap[staffRecord.id].lifetimeTotalRevenue += lifetimeRevenue;
+    commissionsMap[staffRecord.id].lifetimeTotalCommission += lifetimeCommission;
+  });
+
+  const commissions = Object.values(commissionsMap);
+  commissions.sort((a, b) => b.totalCommission - a.totalCommission);
+  return commissions;
+}
+
 // Shared by the JSON and CSV report endpoints below. Reports are a
 // manager-only, finance-facing view of everyone's pay, so — same as
 // Commissions — the viewer (manager included) must have verified their own
@@ -2132,15 +2268,14 @@ async function buildCommissionReport(req, res, monthParam, onProgress) {
     const rep = assigned?.staffId ? repsMap[assigned.staffId] : null;
     if (!rep) continue;
 
-    const assignedAt = assigned.assignedAt ? new Date(assigned.assignedAt) : null;
-    const effectiveSince = assignedAt && assignedAt > period.start ? assignedAt : period.start;
-    if (effectiveSince > period.end) continue; // assigned after this period closed — nothing earned yet
+    const sinceIso = effectiveSinceForPeriod(assigned.assignedAt, period);
+    if (!sinceIso) continue;
 
     reportJobs.push({
       company,
       assigned,
       rep,
-      sinceIso: effectiveSince.toISOString(),
+      sinceIso,
       untilIso: period.end.toISOString(),
     });
   }
@@ -2335,9 +2470,11 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
       : undefined;
 
     // Check cache for manager data (reps only see their own, no cache needed)
+    const period = resolveCurrentMonth();
     const shopId = res.locals.shopify?.session?.shop || 'unknown';
+    const cacheKey = `all:${period.month}`;
     if (isUserManager) {
-      const cached = commissionCache.get(shopId, 'all');
+      const cached = commissionCache.get(shopId, cacheKey);
       if (cached) {
         if (stream) {
           writeNdjson(res, { type: 'result', ...cached });
@@ -2364,64 +2501,20 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
       commissionJobs.push({ company, assigned, staffRecord });
     }
 
-    if (onProgress) {
-      onProgress({
-        phase: 'revenue',
-        done: 0,
-        total: commissionJobs.length,
-        label: 'Calculating commissions',
-      });
-    }
-    const revenues = await fetchCompaniesRevenueSince(
+    const { lifetimeRevenues, monthRevenuesByJobIndex } = await fetchLifetimeAndMonthRevenues(
       client,
-      commissionJobs.map((job) => ({
-        companyId: job.company.id,
-        sinceIso: job.assigned.assignedAt,
-      })),
+      commissionJobs,
+      period,
       onProgress
         ? (p) => onProgress({ phase: 'revenue', label: 'Calculating commissions', ...p })
         : undefined,
     );
 
-    const commissionsMap = {};
-    commissionJobs.forEach((job, i) => {
-      const { company, assigned, staffRecord } = job;
-      if (!commissionsMap[staffRecord.id]) {
-        commissionsMap[staffRecord.id] = {
-          staffId: staffRecord.id,
-          name: staffRecord.name,
-          email: staffRecord.email,
-          commissionTier: staffRecord.commissionTier,
-          companies: [],
-          totalRevenue: 0,
-          totalCommission: 0
-        };
-      }
-
-      // Commission is earned only on orders placed since this rep took over the
-      // account (see fetchCompanyRevenueSince) — not the company's lifetime spend.
-      const revenue = revenues[i].totalSpend;
-      const commission = (revenue * staffRecord.commissionTier) / 100;
-
-      commissionsMap[staffRecord.id].companies.push({
-        companyId: company.id,
-        companyName: company.name,
-        revenue,
-        commission,
-        assignedAt: assigned.assignedAt || null,
-        lastOrderDate: company.performance?.lastOrderDate
-      });
-
-      commissionsMap[staffRecord.id].totalRevenue += revenue;
-      commissionsMap[staffRecord.id].totalCommission += commission;
-    });
-
-    // Non-managers with no linked staff record see nothing (handled by the
-    // per-company skip above never populating commissionsMap for them).
-    const commissions = Object.values(commissionsMap);
-
-    // Sort by total commission descending
-    commissions.sort((a, b) => b.totalCommission - a.totalCommission);
+    const commissions = aggregateCommissionsFromJobs(
+      commissionJobs,
+      lifetimeRevenues,
+      monthRevenuesByJobIndex,
+    );
 
     const rollup = shopId !== 'unknown' && companyMetrics.enabled
       ? await companyMetrics.status(shopId)
@@ -2429,14 +2522,15 @@ app.get('/api/commissions', validateAuthenticatedSession, async (req, res) => {
     const payload = {
       commissions,
       isManager: isUserManager,
+      period: periodPayload(period),
       source: rollup.ready ? 'rollup' : 'shopify',
       rollup,
-      generatedAt: new Date().toISOString()
+      generatedAt: new Date().toISOString(),
     };
 
     // Cache manager data for 5 minutes (reps see personal data, less cacheable)
     if (isUserManager && shopId !== 'unknown') {
-      commissionCache.set(shopId, 'all', payload);
+      commissionCache.set(shopId, cacheKey, payload);
     }
 
     if (stream) {
@@ -2492,51 +2586,37 @@ app.get('/api/commissions/:staffId', validateAuthenticatedSession, async (req, r
     const client = await getGraphqlClient(req, res);
     if (!client) return res.status(401).json({ error: 'Unauthorized' });
 
+    const period = resolveCurrentMonth();
     const companies = await fetchAllCompanies(client, { mode: 'commissions' });
-    const assignedCompanies = companies.filter(
-      (company) => company.assignedStaff?.staffId === staffId,
-    );
-    const revenues = await fetchCompaniesRevenueSince(
-      client,
-      assignedCompanies.map((company) => ({
-        companyId: company.id,
-        sinceIso: company.assignedStaff.assignedAt,
-      })),
-    );
+    const commissionJobs = companies
+      .filter((company) => company.assignedStaff?.staffId === staffId)
+      .map((company) => ({
+        company,
+        assigned: company.assignedStaff,
+        staffRecord,
+      }));
 
-    const repCommissions = {
-      staffId: staffRecord.id,
-      name: staffRecord.name,
-      email: staffRecord.email,
-      commissionTier: staffRecord.commissionTier,
-      companies: [],
-      totalRevenue: 0,
-      totalCommission: 0
-    };
-
-    assignedCompanies.forEach((company, i) => {
-      const revenue = revenues[i].totalSpend;
-      const commission = (revenue * repCommissions.commissionTier) / 100;
-
-      repCommissions.companies.push({
-        companyId: company.id,
-        companyName: company.name,
-        revenue,
-        commission,
-        assignedAt: company.assignedStaff.assignedAt || null,
-        lastOrderDate: company.performance?.lastOrderDate,
-        daysSinceLastOrder: company.performance?.daysSinceLastOrder
-      });
-
-      repCommissions.totalRevenue += revenue;
-      repCommissions.totalCommission += commission;
-    });
-
-    if (repCommissions.companies.length === 0) {
+    if (commissionJobs.length === 0) {
       return res.status(404).json({ error: 'No commissions found for this staff member' });
     }
 
-    res.json({ commissions: repCommissions });
+    const { lifetimeRevenues, monthRevenuesByJobIndex } = await fetchLifetimeAndMonthRevenues(
+      client,
+      commissionJobs,
+      period,
+    );
+    const [repCommissions] = aggregateCommissionsFromJobs(
+      commissionJobs,
+      lifetimeRevenues,
+      monthRevenuesByJobIndex,
+    );
+
+    repCommissions.companies = repCommissions.companies.map((c, i) => ({
+      ...c,
+      daysSinceLastOrder: commissionJobs[i].company.performance?.daysSinceLastOrder,
+    }));
+
+    res.json({ commissions: repCommissions, period: periodPayload(period) });
   } catch (error) {
     if (error instanceof GraphqlQueryError || error instanceof HttpResponseError) {
       return sendShopifyApiError(res, error);

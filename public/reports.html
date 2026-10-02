@@ -78,6 +78,11 @@
         <p class="text-sm text-zinc-500" id="report-subtitle">Revenue and commission owed, by rep, for the selected month.</p>
     </div>
 
+    <div id="mtd-notice" class="hidden bg-sky-50 border border-sky-200 rounded-lg p-3 mb-4 flex items-start gap-2 print-card">
+        <span class="material-symbols-outlined text-sky-600 text-lg flex-shrink-0">schedule</span>
+        <p class="text-xs text-sky-900" id="mtd-notice-text"></p>
+    </div>
+
     <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-6 flex items-start gap-2 print-card">
         <span class="material-symbols-outlined text-amber-600 text-lg flex-shrink-0">info</span>
         <p class="text-xs text-amber-800" id="rate-disclaimer"></p>
@@ -184,15 +189,34 @@
         return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
     }
 
+    function currentUtcMonthValue() {
+        const now = new Date();
+        return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    }
+
     function renderReport(data) {
+        const isOpenMonth = data.period?.month === currentUtcMonthValue();
+        const mtdNotice = document.getElementById('mtd-notice');
+        if (isOpenMonth) {
+            mtdNotice.classList.remove('hidden');
+            document.getElementById('mtd-notice-text').textContent =
+                `${data.period.label} is still in progress (UTC month boundaries). These totals are month-to-date, not a closed payout period — they should match the Commissions tab on the dashboard.`;
+        } else {
+            mtdNotice.classList.add('hidden');
+        }
+
         document.getElementById('report-title').textContent = `Commission Report — ${data.period.label}`;
         document.getElementById('total-commission').textContent = `$${data.totals.totalCommission.toFixed(2)}`;
         document.getElementById('total-revenue').textContent = `$${data.totals.totalRevenue.toFixed(2)}`;
         document.getElementById('rep-count').textContent = data.reps.length;
         document.getElementById('generated-at').textContent = `Generated ${new Date(data.generatedAt).toLocaleString()}`;
-        document.getElementById('report-subtitle').textContent = data.source === 'rollup'
+        let subtitle = data.source === 'rollup'
           ? 'Revenue and commission owed, by rep, for the selected month. Loaded from the daily order rollup.'
           : 'Revenue and commission owed, by rep, for the selected month.';
+        if (isOpenMonth) {
+            subtitle += ' Month-to-date only — not a closed payout period.';
+        }
+        document.getElementById('report-subtitle').textContent = subtitle;
         document.getElementById('rate-disclaimer').textContent =
             `Rates shown are each rep's commission tier as of right now, not a historical snapshot of ${data.period.label}. ` +
             `If a rate changed after ${data.period.label} closed, this report uses the new rate — confirm the % below matches what should apply before paying out.`;
